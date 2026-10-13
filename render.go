@@ -28,8 +28,8 @@ var (
 )
 
 func renderPNG(output io.Writer, stories []Story, width int) error {
-	if width < 640 {
-		return fmt.Errorf("width must be at least 640 pixels")
+	if width < 640 || width > 4096 {
+		return fmt.Errorf("width must be between 640 and 4096 pixels")
 	}
 	if len(stories) == 0 {
 		return fmt.Errorf("at least one story is required")

@@ -94,4 +94,7 @@ func TestRenderPNGRejectsInvalidInput(t *testing.T) {
 	if err := renderPNG(&bytes.Buffer{}, []Story{{Title: "story"}}, 500); err == nil {
 		t.Fatal("renderPNG succeeded with an unsupported width")
 	}
+	if err := renderPNG(&bytes.Buffer{}, []Story{{Title: "story"}}, 5000); err == nil {
+		t.Fatal("renderPNG succeeded with an excessive width")
+	}
 }
