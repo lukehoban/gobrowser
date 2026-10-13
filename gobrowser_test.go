@@ -46,6 +46,75 @@ func TestParseStoriesRejectsUnknownPage(t *testing.T) {
 	}
 }
 
+func TestParseStoriesAppliesTitleCSS(t *testing.T) {
+	page, err := os.ReadFile("testdata/hackernews-styled.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stories, err := parseStories(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stories) != 1 {
+		t.Fatalf("got %d stories, want 1", len(stories))
+	}
+	if !stories[0].HasTitleColor || stories[0].TitleColor != (color.RGBA{R: 255, A: 255}) {
+		t.Errorf("title color = %#v (set %t), want red", stories[0].TitleColor, stories[0].HasTitleColor)
+	}
+	if stories[0].TitleFontSize != 24 {
+		t.Errorf("title font size = %d, want 24", stories[0].TitleFontSize)
+	}
+}
+
+func TestInlineTitleCSSOverridesStylesheet(t *testing.T) {
+	page := []byte(`<style>a { color: blue; font-size: 12px; } .titleline a { color: red; font-size: 24px; }</style>
+<table>
+<tr class="athing"><td class="title"><span class="titleline"><a>A story</a></span></td></tr>
+<tr class="athing"><td class="title"><span class="titleline"><a style="color: green; font-size: 18px">Another story</a></span></td></tr>
+</table>`)
+	stories, err := parseStories(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stories) != 2 {
+		t.Fatalf("got %d stories, want 2", len(stories))
+	}
+	if got, want := stories[0].TitleColor, (color.RGBA{R: 255, A: 255}); got != want {
+		t.Errorf("stylesheet title color = %#v, want %#v", got, want)
+	}
+	if stories[0].TitleFontSize != 24 {
+		t.Errorf("stylesheet title font size = %d, want 24", stories[0].TitleFontSize)
+	}
+	if got, want := stories[1].TitleColor, (color.RGBA{G: 128, A: 255}); got != want {
+		t.Errorf("inline title color = %#v, want %#v", got, want)
+	}
+	if stories[1].TitleFontSize != 18 {
+		t.Errorf("inline title font size = %d, want 18", stories[1].TitleFontSize)
+	}
+}
+
+func TestParseCSSValues(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  color.RGBA
+	}{
+		{input: "red", want: color.RGBA{R: 255, A: 255}},
+		{input: "#0f0", want: color.RGBA{G: 255, A: 255}},
+		{input: "rgb(1, 2, 3)", want: color.RGBA{R: 1, G: 2, B: 3, A: 255}},
+	} {
+		got, ok := parseCSSColor(test.input)
+		if !ok || got != test.want {
+			t.Errorf("parseCSSColor(%q) = %#v, %t; want %#v, true", test.input, got, ok, test.want)
+		}
+	}
+	if got, ok := parseCSSFontSize("12pt"); !ok || got != 16 {
+		t.Errorf("parseCSSFontSize(12pt) = %d, %t; want 16, true", got, ok)
+	}
+	if _, ok := parseCSSFontSize("48px"); ok {
+		t.Error("parseCSSFontSize(48px) accepted a size over the supported limit")
+	}
+}
+
 func TestFetchPage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("User-Agent") == "" {
@@ -84,7 +153,6 @@ func TestRenderPNG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	rendered, err := png.Decode(&output)
 	if err != nil {
 		t.Fatal(err)
@@ -94,6 +162,50 @@ func TestRenderPNG(t *testing.T) {
 	}
 	if got, want := rendered.At(16, 14), color.Color(orangeColor); got != want {
 		t.Errorf("header pixel = %v, want %v", got, want)
+	}
+}
+
+func TestRenderPNGAppliesTitleCSS(t *testing.T) {
+	page, err := os.ReadFile("testdata/hackernews-styled.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stories, err := parseStories(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := renderPNG(&output, stories, 800); err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := png.Decode(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	redPixels := 0
+	for y := 0; y < rendered.Bounds().Dy(); y++ {
+		for x := 0; x < rendered.Bounds().Dx(); x++ {
+			r, g, b, _ := rendered.At(x, y).RGBA()
+			if r > 12_000 && r > g*2 && r > b*2 {
+				redPixels++
+			}
+		}
+	}
+	if redPixels == 0 {
+		t.Fatal("rendered image contains no red title pixels")
+	}
+
+	var defaultOutput bytes.Buffer
+	if err := renderPNG(&defaultOutput, []Story{{Rank: "1", Title: stories[0].Title}}, 800); err != nil {
+		t.Fatal(err)
+	}
+	defaultImage, err := png.Decode(&defaultOutput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered.Bounds().Dy() <= defaultImage.Bounds().Dy() {
+		t.Errorf("styled image height = %d, want taller than default %d for 24px title", rendered.Bounds().Dy(), defaultImage.Bounds().Dy())
 	}
 }
 

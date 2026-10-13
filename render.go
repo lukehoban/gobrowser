@@ -18,6 +18,8 @@ import (
 const (
 	headerHeight = 34
 	rowHeight    = 48
+	minTitleFont = 6
+	maxTitleFont = 32
 )
 
 var (
@@ -44,13 +46,44 @@ func renderPNG(output io.Writer, stories []Story, width int) error {
 		return fmt.Errorf("create title font: %w", err)
 	}
 	defer titleFace.Close()
+	titleFaces := map[int]font.Face{defaultTitleFontSize: titleFace}
 	metaFace, err := opentype.NewFace(parsedFont, &opentype.FaceOptions{Size: 11, DPI: 72, Hinting: font.HintingFull})
 	if err != nil {
 		return fmt.Errorf("create metadata font: %w", err)
 	}
 	defer metaFace.Close()
 
-	height := 64 + len(stories)*rowHeight + 18
+	rowHeights := make([]int, len(stories))
+	height := 64 + 18
+	for index, story := range stories {
+		fontSize := story.TitleFontSize
+		if fontSize == 0 {
+			fontSize = defaultTitleFontSize
+		}
+		if fontSize < minTitleFont || fontSize > maxTitleFont {
+			return fmt.Errorf("title font size must be between %d and %d pixels", minTitleFont, maxTitleFont)
+		}
+		if _, exists := titleFaces[fontSize]; !exists {
+			face, err := opentype.NewFace(parsedFont, &opentype.FaceOptions{Size: float64(fontSize), DPI: 72, Hinting: font.HintingFull})
+			if err != nil {
+				for _, openedFace := range titleFaces {
+					openedFace.Close()
+				}
+				return fmt.Errorf("create title font: %w", err)
+			}
+			titleFaces[fontSize] = face
+		}
+		_, _, rowHeights[index] = titleMetrics(fontSize)
+		height += rowHeights[index]
+	}
+	defer func() {
+		for size, face := range titleFaces {
+			if size != defaultTitleFontSize {
+				face.Close()
+			}
+		}
+	}()
+
 	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
 	draw.Draw(canvas, canvas.Bounds(), image.NewUniform(pageColor), image.Point{}, draw.Src)
 
@@ -61,7 +94,12 @@ func renderPNG(output io.Writer, stories []Story, width int) error {
 
 	rowTop := 14 + headerHeight + 12
 	for index, story := range stories {
-		drawStory(canvas, left, contentWidth, rowTop+index*rowHeight, story, titleFace, metaFace)
+		fontSize := story.TitleFontSize
+		if fontSize == 0 {
+			fontSize = defaultTitleFontSize
+		}
+		drawStory(canvas, left, contentWidth, rowTop, story, titleFaces[fontSize], metaFace)
+		rowTop += rowHeights[index]
 	}
 	return png.Encode(output, canvas)
 }
@@ -81,6 +119,11 @@ func drawHeader(canvas *image.RGBA, left, width int, titleFace, metaFace font.Fa
 }
 
 func drawStory(canvas *image.RGBA, left, width, top int, story Story, titleFace, metaFace font.Face) {
+	titleBaseline, metadataBaseline, _ := titleMetrics(storyTitleFontSize(story))
+	titleColor := color.Color(textColor)
+	if story.HasTitleColor {
+		titleColor = story.TitleColor
+	}
 	rank := story.Rank + "."
 	rankWidth := textWidth(metaFace, rank)
 	drawText(canvas, metaFace, left+23-rankWidth, top+16, rank, mutedColor)
@@ -96,7 +139,7 @@ func drawStory(canvas *image.RGBA, left, width, top int, story Story, titleFace,
 		available -= textWidth(metaFace, domain) + 6
 	}
 	title := fitText(titleFace, story.Title, available)
-	drawText(canvas, titleFace, titleX, top+17, title, textColor)
+	drawText(canvas, titleFace, titleX, top+titleBaseline, title, titleColor)
 	if domain != "" {
 		domainX := titleX + textWidth(titleFace, title) + 6
 		drawText(canvas, metaFace, domainX, top+16, fitText(metaFace, domain, left+width-domainX-8), mutedColor)
@@ -115,7 +158,24 @@ func drawStory(canvas *image.RGBA, left, width, top int, story Story, titleFace,
 	if story.Comments != "" {
 		metadata = append(metadata, story.Comments)
 	}
-	drawText(canvas, metaFace, titleX, top+34, strings.Join(metadata, " | "), mutedColor)
+	drawText(canvas, metaFace, titleX, top+metadataBaseline, strings.Join(metadata, " | "), mutedColor)
+}
+
+func storyTitleFontSize(story Story) int {
+	if story.TitleFontSize == 0 {
+		return defaultTitleFontSize
+	}
+	return story.TitleFontSize
+}
+
+func titleMetrics(fontSize int) (titleBaseline, metadataBaseline, height int) {
+	titleBaseline = 17
+	if fontSize > defaultTitleFontSize {
+		titleBaseline = fontSize + 1
+	}
+	metadataBaseline = max(34, titleBaseline+17)
+	height = max(rowHeight, metadataBaseline+14)
+	return
 }
 
 func drawText(canvas *image.RGBA, face font.Face, x, baseline int, text string, foreground color.Color) {

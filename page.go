@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image/color"
 	"io"
 	"net/http"
 	"net/url"
@@ -24,6 +25,10 @@ type Story struct {
 	User     string
 	Age      string
 	Comments string
+
+	TitleColor    color.RGBA
+	HasTitleColor bool
+	TitleFontSize int
 }
 
 func fetchPage(ctx context.Context, rawURL string) ([]byte, error) {
@@ -66,6 +71,7 @@ func parseStories(page []byte) ([]Story, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse HTML: %w", err)
 	}
+	rules := parseCSSRules(document)
 
 	var stories []Story
 	for node := document.FirstChild; node != nil; node = nextNode(node) {
@@ -90,6 +96,7 @@ func parseStories(page []byte) ([]Story, error) {
 		if story.Domain == "" && titleLink != nil {
 			story.Domain = domainFromHref(attribute(titleLink, "href"))
 		}
+		applyTitleStyles(&story, titleLink, rules)
 
 		if subtextRow := followingSiblingElement(node, "tr"); subtextRow != nil {
 			subtext := findClass(subtextRow, "subtext")
