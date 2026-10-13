@@ -167,7 +167,7 @@ func titleInk(img image.Image) (ink, red int) {
 			if pixel != background {
 				ink++
 			}
-			if pixel.R > pixel.G*2 && pixel.R > pixel.B*2 {
+			if pixel.R > 200 && pixel.G < 100 && pixel.B < 100 {
 				red++
 			}
 		}

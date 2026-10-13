@@ -30,6 +30,6 @@ Options:
 
 This renderer targets Hacker News story tables: ranked `.athing` rows with `.titleline` titles and optional `.sitebit` domains, followed by `.subtext` metadata (`.score`, `.hnuser`, `.age`, and comments links). It draws a fixed Hacker News-inspired layout with an orange navigation bar, ranked titles, domains, and metadata using an embedded Go font.
 
-For story titles, it reads embedded `<style>` rules and inline styles using simple descendant selectors (tags, classes, and IDs). It applies `color` (basic named colors, `#rgb`, `#rrggbb`, and `rgb()`) and `font-size` in `px` or `pt`, clamped to 6–32 CSS pixels.
+For story titles, it reads embedded `<style>` rules and inline styles using simple descendant selectors (tags, classes, and IDs). It applies `color` (basic named colors, `#rgb`, `#rrggbb`, and `rgb()`) and `font-size` in `px` or `pt`, accepting sizes from 6–32 CSS pixels.
 
 It does not implement general CSS parsing or cascading, external stylesheets, arbitrary page layout, images, or interactive browser behavior. See [issue #5](https://github.com/lukehoban/gobrowser/issues/5) for the supported CSS slice.

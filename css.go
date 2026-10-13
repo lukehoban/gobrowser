@@ -10,6 +10,13 @@ import (
 	"golang.org/x/net/html"
 )
 
+const (
+	maxCSSRules          = 4096
+	maxCSSRuleSize       = 4096
+	maxCSSSelectorLength = 256
+	maxCSSSelectorParts  = 16
+)
+
 type titleStyle struct {
 	Color    color.RGBA
 	FontSize float64
@@ -66,7 +73,11 @@ func textContent(node *html.Node) string {
 func parseCSSRules(source string, order *int) []cssRule {
 	source = removeCSSComments(source)
 	var rules []cssRule
+	parsedRules := 0
 	for {
+		if *order >= maxCSSRules || parsedRules >= maxCSSRules {
+			break
+		}
 		open := strings.IndexByte(source, '{')
 		if open < 0 {
 			break
@@ -76,7 +87,13 @@ func parseCSSRules(source string, order *int) []cssRule {
 			break
 		}
 		close += open + 1
-		declarations := parseCSSDeclarations(source[open+1 : close])
+		parsedRules++
+		declarationSource := source[open+1 : close]
+		if len(declarationSource) > maxCSSRuleSize {
+			source = source[close+1:]
+			continue
+		}
+		declarations := parseCSSDeclarations(declarationSource)
 		for _, selector := range strings.Split(source[:open], ",") {
 			selector = strings.TrimSpace(selector)
 			_, specificity, ok := parseSelector(selector)
@@ -213,8 +230,11 @@ func parseCSSFontSize(value string) (float64, bool) {
 }
 
 func parseSelector(selector string) ([]string, int, bool) {
+	if len(selector) > maxCSSSelectorLength {
+		return nil, 0, false
+	}
 	parts := strings.Fields(selector)
-	if len(parts) == 0 {
+	if len(parts) == 0 || len(parts) > maxCSSSelectorParts {
 		return nil, 0, false
 	}
 	specificity := 0
