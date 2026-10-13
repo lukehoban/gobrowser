@@ -173,15 +173,20 @@ func TestRenderPNGAppliesCSSPixels(t *testing.T) {
 }
 
 func TestRenderPNGLargeTitleDoesNotOverlapMetadataOrNextStory(t *testing.T) {
-	stories := []Story{
-		{
-			Rank:  "1",
-			Title: "A large styled story title",
-			Score: "42 points",
-			Style: textStyle{color: color.RGBA{R: 255, A: 255}, hasColor: true, fontSize: maxTitleFontSize},
-		},
-		{Rank: "2", Title: "A following story"},
+	page, err := os.ReadFile("testdata/hackernews-css.html")
+	if err != nil {
+		t.Fatal(err)
 	}
+	page = []byte(strings.Replace(string(page), "font-size: 24px", "font-size: 64px", 1))
+	stories, err := parseStories(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stories[0].Domain = ""
+	if got := stories[0].Style.fontSize; got != maxTitleFontSize {
+		t.Fatalf("parsed title font size = %v, want %v", got, maxTitleFontSize)
+	}
+	stories = append(stories, Story{Rank: "2", Title: "A following story"})
 
 	firstStoryImage := renderStoriesForTest(t, stories[:1])
 	rendered := renderStoriesForTest(t, stories)
