@@ -202,13 +202,20 @@ func TestRenderPNGSeparatesLargeCSSStories(t *testing.T) {
 	firstRowHeight := rendered.Bounds().Dy() - pageVerticalSpace - rowHeight
 	secondRowTop := 14 + headerHeight + 12 + firstRowHeight
 
+	title := colorBounds(rendered, color.RGBA{R: 255, A: 255}, image.Rect(72, 60, 700, secondRowTop))
 	metadata := grayInkBounds(rendered, image.Rect(72, 60, 700, secondRowTop))
 	nextTitle := colorBounds(rendered, textColor, image.Rect(72, secondRowTop, 700, rendered.Bounds().Dy()))
+	if title.Empty() {
+		t.Fatal("large story title was not rendered")
+	}
 	if metadata.Empty() {
 		t.Fatalf("large story metadata was not rendered (image height %d, first row height %d, second row top %d)", rendered.Bounds().Dy(), firstRowHeight, secondRowTop)
 	}
 	if nextTitle.Empty() {
 		t.Fatal("following story title was not rendered")
+	}
+	if title.Max.Y >= metadata.Min.Y {
+		t.Errorf("large story title ends at y=%d, overlapping metadata starting at y=%d", title.Max.Y, metadata.Min.Y)
 	}
 	if metadata.Max.Y >= nextTitle.Min.Y {
 		t.Errorf("large story metadata ends at y=%d, overlapping following title starting at y=%d", metadata.Max.Y, nextTitle.Min.Y)
