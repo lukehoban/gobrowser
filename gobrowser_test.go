@@ -172,6 +172,60 @@ func TestRenderPNGAppliesCSSPixels(t *testing.T) {
 	}
 }
 
+func TestRenderPNGLargeTitleDoesNotOverlapMetadataOrNextStory(t *testing.T) {
+	stories := []Story{
+		{
+			Rank:  "1",
+			Title: "A large styled story title",
+			Score: "42 points",
+			Style: textStyle{color: color.RGBA{R: 255, A: 255}, hasColor: true, fontSize: maxTitleFontSize},
+		},
+		{Rank: "2", Title: "A following story"},
+	}
+
+	firstStoryImage := renderStoriesForTest(t, stories[:1])
+	rendered := renderStoriesForTest(t, stories)
+	titleInk := image.Rectangle{}
+	nextTitleInk := image.Rectangle{}
+	for y := 60; y < rendered.Bounds().Dy(); y++ {
+		for x := 72; x < 700; x++ {
+			pixel := color.RGBAModel.Convert(rendered.At(x, y)).(color.RGBA)
+			if pixel.R > 160 && pixel.G < 100 && pixel.B < 100 {
+				titleInk = addPixel(titleInk, x, y)
+			}
+			if pixel == textColor && y > 100 {
+				nextTitleInk = addPixel(nextTitleInk, x, y)
+			}
+		}
+	}
+	firstRowEnd := firstStoryImage.Bounds().Dy() - 22
+	metadataInk := image.Rectangle{}
+	for y := 60; y < firstRowEnd; y++ {
+		for x := 72; x < 700; x++ {
+			pixel := color.RGBAModel.Convert(rendered.At(x, y)).(color.RGBA)
+			if pixel.R == pixel.G && pixel.G == pixel.B && pixel.R < 220 {
+				metadataInk = addPixel(metadataInk, x, y)
+			}
+		}
+	}
+	if titleInk.Empty() || metadataInk.Empty() || nextTitleInk.Empty() {
+		t.Fatalf("expected title, metadata, and following-story pixels; got title=%v metadata=%v next=%v",
+			titleInk, metadataInk, nextTitleInk)
+	}
+	if titleInk.Max.Y >= metadataInk.Min.Y {
+		t.Errorf("large title ink extends to y=%d, overlapping metadata starting at y=%d", titleInk.Max.Y-1, metadataInk.Min.Y)
+	}
+	if metadataInk.Max.Y >= nextTitleInk.Min.Y {
+		t.Errorf("metadata extends to y=%d, overlapping following story starting at y=%d", metadataInk.Max.Y-1, nextTitleInk.Min.Y)
+	}
+	if nextTitleInk.Min.Y < firstRowEnd {
+		t.Errorf("following story starts at y=%d before first row ends at y=%d", nextTitleInk.Min.Y, firstRowEnd)
+	}
+	if got, want := rendered.Bounds().Dy(), firstStoryImage.Bounds().Dy()+rowHeight; got != want {
+		t.Errorf("two-story image height = %d, want single-story height %d plus %dpx default row", got, firstStoryImage.Bounds().Dy(), rowHeight)
+	}
+}
+
 func TestRenderPNGRejectsInvalidInput(t *testing.T) {
 	if err := renderPNG(&bytes.Buffer{}, nil, 800); err == nil {
 		t.Fatal("renderPNG succeeded without stories")
@@ -184,9 +238,13 @@ func TestRenderPNGRejectsInvalidInput(t *testing.T) {
 }
 
 func renderStoryForTest(t *testing.T, story Story) *image.RGBA {
+	return renderStoriesForTest(t, []Story{story})
+}
+
+func renderStoriesForTest(t *testing.T, stories []Story) *image.RGBA {
 	t.Helper()
 	var output bytes.Buffer
-	if err := renderPNG(&output, []Story{story}, 800); err != nil {
+	if err := renderPNG(&output, stories, 800); err != nil {
 		t.Fatal(err)
 	}
 	rendered, err := png.Decode(&output)
@@ -200,9 +258,17 @@ func renderStoryForTest(t *testing.T, story Story) *image.RGBA {
 	return rgba
 }
 
+func addPixel(bounds image.Rectangle, x, y int) image.Rectangle {
+	pixel := image.Rect(x, y, x+1, y+1)
+	if bounds.Empty() {
+		return pixel
+	}
+	return bounds.Union(pixel)
+}
+
 func inkBounds(rendered *image.RGBA, target color.RGBA) image.Rectangle {
 	bounds := image.Rectangle{}
-	for y := 50; y < 82; y++ {
+	for y := 60; y < rendered.Bounds().Dy(); y++ {
 		for x := 72; x < 700; x++ {
 			pixel := color.RGBAModel.Convert(rendered.At(x, y)).(color.RGBA)
 			if pixel != target {
