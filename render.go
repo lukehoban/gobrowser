@@ -106,8 +106,11 @@ func drawStory(canvas *image.RGBA, left, width, top int, story Story, titleFace,
 	if story.Score != "" {
 		metadata = append(metadata, story.Score)
 	}
+	if story.User != "" {
+		metadata = append(metadata, "by "+story.User)
+	}
 	if story.Age != "" {
-		metadata = append(metadata, "by "+story.Age)
+		metadata = append(metadata, story.Age)
 	}
 	if story.Comments != "" {
 		metadata = append(metadata, story.Comments)

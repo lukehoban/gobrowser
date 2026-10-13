@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/net/html"
 )
@@ -19,6 +21,7 @@ type Story struct {
 	Title    string
 	Domain   string
 	Score    string
+	User     string
 	Age      string
 	Comments string
 }
@@ -41,7 +44,7 @@ func fetchPage(ctx context.Context, rawURL string) ([]byte, error) {
 	}
 	request.Header.Set("User-Agent", "gobrowser/0.1 (+https://github.com/lukehoban/gobrowser)")
 
-	client := &http.Client{Timeout: 20_000_000_000}
+	client := &http.Client{Timeout: 20 * time.Second}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("fetch page: %w", err)
@@ -62,7 +65,7 @@ func fetchPage(ctx context.Context, rawURL string) ([]byte, error) {
 }
 
 func parseStories(page []byte) ([]Story, error) {
-	document, err := html.Parse(strings.NewReader(string(page)))
+	document, err := html.Parse(bytes.NewReader(page))
 	if err != nil {
 		return nil, fmt.Errorf("parse HTML: %w", err)
 	}
@@ -83,7 +86,7 @@ func parseStories(page []byte) ([]Story, error) {
 		story := Story{
 			Rank:   strings.TrimSuffix(normalizedText(findClass(node, "rank")), "."),
 			Title:  title,
-			Domain: strings.Trim(strings.TrimSpace(normalizedText(findClass(titleLine, "sitebit"))), "()"),
+			Domain: strings.TrimSpace(strings.Trim(strings.TrimSpace(normalizedText(findClass(titleLine, "sitebit"))), "()")),
 		}
 		if story.Rank == "" {
 			story.Rank = strconv.Itoa(len(stories) + 1)
@@ -92,8 +95,10 @@ func parseStories(page []byte) ([]Story, error) {
 			story.Domain = domainFromHref(attribute(titleLink, "href"))
 		}
 
-		subtext := findClass(node.NextSibling, "subtext")
+		subtextRow := followingSiblingElement(node, "tr")
+		subtext := findClass(subtextRow, "subtext")
 		story.Score = normalizedText(findClass(subtext, "score"))
+		story.User = normalizedText(findClass(subtext, "hnuser"))
 		story.Age = normalizedText(findClass(subtext, "age"))
 		story.Comments = findCommentsLink(subtext)
 		stories = append(stories, story)
@@ -102,6 +107,15 @@ func parseStories(page []byte) ([]Story, error) {
 		return nil, fmt.Errorf("no Hacker News story rows found")
 	}
 	return stories, nil
+}
+
+func followingSiblingElement(node *html.Node, tag string) *html.Node {
+	for sibling := node.NextSibling; sibling != nil; sibling = sibling.NextSibling {
+		if sibling.Type == html.ElementNode && sibling.Data == tag {
+			return sibling
+		}
+	}
+	return nil
 }
 
 func nextNode(node *html.Node) *html.Node {
