@@ -18,7 +18,16 @@ import (
 const (
 	headerHeight = 34
 	rowHeight    = 48
+	rowPadding   = 3
+	rowGap       = 2
+	rowBottom    = 7
 )
+
+type storyLayout struct {
+	height           int
+	titleBaseline    int
+	metadataBaseline int
+}
 
 var (
 	pageColor   = color.RGBA{R: 246, G: 246, B: 239, A: 255}
@@ -70,12 +79,20 @@ func renderPNG(output io.Writer, stories []Story, width int) error {
 	defer metaFace.Close()
 	defer metaFace.Close()
 
-	height := 64 + len(stories)*rowHeight + 18
-	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
-	draw.Draw(canvas, canvas.Bounds(), image.NewUniform(pageColor), image.Point{}, draw.Src)
-
 	contentWidth := min(width-32, 960)
 	left := (width - contentWidth) / 2
+	layouts := make([]storyLayout, len(stories))
+	height := 64 + 18
+	for index, story := range stories {
+		titleFace, err := titleFaceForSize(story.Style.fontSize)
+		if err != nil {
+			return err
+		}
+		layouts[index] = calculateStoryLayout(titleFace, metaFace)
+		height += layouts[index].height
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
+	draw.Draw(canvas, canvas.Bounds(), image.NewUniform(pageColor), image.Point{}, draw.Src)
 	draw.Draw(canvas, image.Rect(left, 14, left+contentWidth, 14+headerHeight), image.NewUniform(orangeColor), image.Point{}, draw.Src)
 	drawHeader(canvas, left, contentWidth, titleFace, metaFace)
 
@@ -85,9 +102,26 @@ func renderPNG(output io.Writer, stories []Story, width int) error {
 		if err != nil {
 			return err
 		}
-		drawStory(canvas, left, contentWidth, rowTop+index*rowHeight, story, titleFace, metaFace)
+		drawStory(canvas, left, contentWidth, rowTop, story, titleFace, metaFace, layouts[index])
+		rowTop += layouts[index].height
 	}
 	return png.Encode(output, canvas)
+}
+
+func calculateStoryLayout(titleFace, metaFace font.Face) storyLayout {
+	titleMetrics := titleFace.Metrics()
+	metadataMetrics := metaFace.Metrics()
+	titleBaseline := rowPadding + titleMetrics.Ascent.Ceil()
+	metadataBaseline := titleBaseline + titleMetrics.Descent.Ceil() + rowGap + metadataMetrics.Ascent.Ceil()
+	height := metadataBaseline + metadataMetrics.Descent.Ceil() + rowBottom
+	if height < rowHeight {
+		height = rowHeight
+	}
+	return storyLayout{
+		height:           height,
+		titleBaseline:    titleBaseline,
+		metadataBaseline: metadataBaseline,
+	}
 }
 
 func drawHeader(canvas *image.RGBA, left, width int, titleFace, metaFace font.Face) {
@@ -104,7 +138,7 @@ func drawHeader(canvas *image.RGBA, left, width int, titleFace, metaFace font.Fa
 	drawText(canvas, metaFace, left+width-textWidth(metaFace, login)-10, 35, login, textColor)
 }
 
-func drawStory(canvas *image.RGBA, left, width, top int, story Story, titleFace, metaFace font.Face) {
+func drawStory(canvas *image.RGBA, left, width, top int, story Story, titleFace, metaFace font.Face, layout storyLayout) {
 	rank := story.Rank + "."
 	rankWidth := textWidth(metaFace, rank)
 	drawText(canvas, metaFace, left+23-rankWidth, top+16, rank, mutedColor)
@@ -124,7 +158,7 @@ func drawStory(canvas *image.RGBA, left, width, top int, story Story, titleFace,
 	if story.Style.hasColor {
 		titleColor = story.Style.color
 	}
-	drawText(canvas, titleFace, titleX, top+17, title, titleColor)
+	drawText(canvas, titleFace, titleX, top+layout.titleBaseline, title, titleColor)
 	if domain != "" {
 		domainX := titleX + textWidth(titleFace, title) + 6
 		drawText(canvas, metaFace, domainX, top+16, fitText(metaFace, domain, left+width-domainX-8), mutedColor)
@@ -143,7 +177,7 @@ func drawStory(canvas *image.RGBA, left, width, top int, story Story, titleFace,
 	if story.Comments != "" {
 		metadata = append(metadata, story.Comments)
 	}
-	drawText(canvas, metaFace, titleX, top+34, strings.Join(metadata, " | "), mutedColor)
+	drawText(canvas, metaFace, titleX, top+layout.metadataBaseline, strings.Join(metadata, " | "), mutedColor)
 }
 
 func drawText(canvas *image.RGBA, face font.Face, x, baseline int, text string, foreground color.Color) {
