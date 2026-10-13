@@ -4,6 +4,10 @@
 
 Example generated from the bundled HTML fixture.
 
+The second example demonstrates embedded CSS changing story-title color and size:
+
+![Hacker News title rendered with embedded CSS](docs/hackernews-css.png)
+
 ## Run
 
 Render the live Hacker News homepage:
@@ -30,4 +34,4 @@ Options:
 
 This renderer targets Hacker News story tables: ranked `.athing` rows with `.titleline` titles and optional `.sitebit` domains, followed by `.subtext` metadata (`.score`, `.hnuser`, `.age`, and comments links). It draws a fixed Hacker News-inspired layout with an orange navigation bar, ranked titles, domains, and metadata using an embedded Go font. Embedded `<style>` rules and inline styles can set story-title `color` and `font-size`; selectors support tag, ID, and class components with descendant and child combinators. Color accepts common names, hex, and integer `rgb()` values. Font sizes accept `px`, `pt`, `em`, `rem`, and `%`, bounded to 1–64 pixels.
 
-CSS support is intentionally limited to those story-title declarations; external stylesheets, general page layout, images, and interactive browser behavior are not implemented. See [issue #4](https://github.com/lukehoban/gobrowser/issues/4) for the initial rendering slice and [issue #5](https://github.com/lukehoban/gobrowser/issues/5) for focused CSS support.
+CSS support is intentionally limited to those story-title declarations; external stylesheets, general page layout, images, and interactive browser behavior are not implemented. Linked stylesheet loading is tracked in [issue #7](https://github.com/lukehoban/gobrowser/issues/7). See [issue #4](https://github.com/lukehoban/gobrowser/issues/4) for the initial rendering slice and [issue #5](https://github.com/lukehoban/gobrowser/issues/5) for focused CSS support.
