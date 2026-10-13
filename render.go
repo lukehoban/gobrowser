@@ -39,15 +39,35 @@ func renderPNG(output io.Writer, stories []Story, width int) error {
 	if err != nil {
 		return fmt.Errorf("parse embedded font: %w", err)
 	}
-	titleFace, err := opentype.NewFace(parsedFont, &opentype.FaceOptions{Size: 15, DPI: 72, Hinting: font.HintingFull})
-	if err != nil {
-		return fmt.Errorf("create title font: %w", err)
+	titleFaces := make(map[float64]font.Face)
+	defer func() {
+		for _, face := range titleFaces {
+			face.Close()
+		}
+	}()
+	titleFaceForSize := func(size float64) (font.Face, error) {
+		if size == 0 {
+			size = defaultTitleFontSize
+		}
+		if face, ok := titleFaces[size]; ok {
+			return face, nil
+		}
+		face, err := opentype.NewFace(parsedFont, &opentype.FaceOptions{Size: size, DPI: 72, Hinting: font.HintingFull})
+		if err != nil {
+			return nil, fmt.Errorf("create title font: %w", err)
+		}
+		titleFaces[size] = face
+		return face, nil
 	}
-	defer titleFace.Close()
+	titleFace, err := titleFaceForSize(defaultTitleFontSize)
+	if err != nil {
+		return err
+	}
 	metaFace, err := opentype.NewFace(parsedFont, &opentype.FaceOptions{Size: 11, DPI: 72, Hinting: font.HintingFull})
 	if err != nil {
 		return fmt.Errorf("create metadata font: %w", err)
 	}
+	defer metaFace.Close()
 	defer metaFace.Close()
 
 	height := 64 + len(stories)*rowHeight + 18
@@ -61,6 +81,10 @@ func renderPNG(output io.Writer, stories []Story, width int) error {
 
 	rowTop := 14 + headerHeight + 12
 	for index, story := range stories {
+		titleFace, err := titleFaceForSize(story.Style.fontSize)
+		if err != nil {
+			return err
+		}
 		drawStory(canvas, left, contentWidth, rowTop+index*rowHeight, story, titleFace, metaFace)
 	}
 	return png.Encode(output, canvas)
@@ -96,7 +120,11 @@ func drawStory(canvas *image.RGBA, left, width, top int, story Story, titleFace,
 		available -= textWidth(metaFace, domain) + 6
 	}
 	title := fitText(titleFace, story.Title, available)
-	drawText(canvas, titleFace, titleX, top+17, title, textColor)
+	titleColor := textColor
+	if story.Style.hasColor {
+		titleColor = story.Style.color
+	}
+	drawText(canvas, titleFace, titleX, top+17, title, titleColor)
 	if domain != "" {
 		domainX := titleX + textWidth(titleFace, title) + 6
 		drawText(canvas, metaFace, domainX, top+16, fitText(metaFace, domain, left+width-domainX-8), mutedColor)

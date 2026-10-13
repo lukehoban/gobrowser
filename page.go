@@ -24,6 +24,7 @@ type Story struct {
 	User     string
 	Age      string
 	Comments string
+	Style    textStyle
 }
 
 func fetchPage(ctx context.Context, rawURL string) ([]byte, error) {
@@ -66,6 +67,7 @@ func parseStories(page []byte) ([]Story, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse HTML: %w", err)
 	}
+	rules := parseCSSRules(document)
 
 	var stories []Story
 	for node := document.FirstChild; node != nil; node = nextNode(node) {
@@ -83,6 +85,7 @@ func parseStories(page []byte) ([]Story, error) {
 			Rank:   strings.TrimSuffix(normalizedText(findClass(node, "rank")), "."),
 			Title:  title,
 			Domain: strings.TrimSpace(strings.Trim(strings.TrimSpace(normalizedText(findClass(titleLine, "sitebit"))), "()")),
+			Style:  resolveTitleStyle(titleLink, rules),
 		}
 		if story.Rank == "" {
 			story.Rank = strconv.Itoa(len(stories) + 1)
