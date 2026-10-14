@@ -16,6 +16,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/opentype"
 )
 
 func TestParseStories(t *testing.T) {
@@ -441,6 +445,66 @@ func TestRenderPNGSeparatesLargeCSSStories(t *testing.T) {
 	}
 	if metadata.Max.Y >= nextTitle.Min.Y {
 		t.Errorf("large story metadata ends at y=%d, overlapping following title starting at y=%d", metadata.Max.Y, nextTitle.Min.Y)
+	}
+}
+
+func TestRenderPNGWrapsLongTitlesAtConstrainedWidth(t *testing.T) {
+	parsedFont, err := opentype.Parse(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	titleFace, err := opentype.NewFace(parsedFont, &opentype.FaceOptions{Size: 40, DPI: 72, Hinting: font.HintingFull})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer titleFace.Close()
+
+	title := strings.Repeat("A Hacker News story about Go rendering ", 4)
+	lines := wrapText(titleFace, title, 200)
+	if len(lines) < 2 {
+		t.Fatalf("wrapped title into %d line(s), want multiple", len(lines))
+	}
+	if got, want := strings.Join(lines, " "), strings.Join(strings.Fields(title), " "); got != want {
+		t.Errorf("wrapped title = %q, want all title text %q", got, want)
+	}
+	for _, line := range lines {
+		if got := textWidth(titleFace, line); got > 200 {
+			t.Errorf("wrapped line width = %d, exceeds available width 200: %q", got, line)
+		}
+	}
+
+	var output bytes.Buffer
+	story := Story{
+		Rank:  "1",
+		Title: title,
+		Score: "10 points",
+		Style: textStyle{color: color.RGBA{R: 255, A: 255}, hasColor: true, fontSize: 40},
+	}
+	if err := renderPNG(&output, []Story{story}, 640); err != nil {
+		t.Fatal(err)
+	}
+	renderedImage, err := png.Decode(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, ok := renderedImage.(*image.RGBA)
+	if !ok {
+		t.Fatalf("decoded PNG has type %T, want *image.RGBA", renderedImage)
+	}
+
+	titleInk := colorBounds(rendered, color.RGBA{R: 255, A: 255}, image.Rect(68, 60, 632, rendered.Bounds().Dy()))
+	metadataInk := grayInkBounds(rendered, image.Rect(68, 60, 632, rendered.Bounds().Dy()))
+	if titleInk.Empty() {
+		t.Fatal("wrapped title was not rendered")
+	}
+	if titleInk.Dy() <= 40 {
+		t.Errorf("title ink height = %d, want multiple rendered lines", titleInk.Dy())
+	}
+	if metadataInk.Empty() {
+		t.Fatal("metadata below the wrapped title was not rendered")
+	}
+	if titleInk.Max.Y >= metadataInk.Min.Y {
+		t.Errorf("wrapped title ends at y=%d, overlapping metadata starting at y=%d", titleInk.Max.Y, metadataInk.Min.Y)
 	}
 }
 
