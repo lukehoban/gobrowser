@@ -8,6 +8,10 @@ The second example demonstrates embedded CSS changing story-title color and size
 
 ![Hacker News title rendered with embedded CSS](docs/hackernews-css.png)
 
+Long story titles wrap at narrower output widths:
+
+![A long Hacker News story title wrapped across multiple lines](docs/hackernews-wrapped-title.png)
+
 ## Run
 
 Render the live Hacker News homepage:
@@ -32,7 +36,7 @@ Options:
 
 ## Supported page structure
 
-This renderer targets Hacker News story tables: ranked `.athing` rows with `.titleline` titles and optional `.sitebit` domains, followed by `.subtext` metadata (`.score`, `.hnuser`, `.age`, and comments links). It draws a fixed Hacker News-inspired layout with an orange navigation bar, ranked titles, domains, and metadata using an embedded Go font. Embedded `<style>` rules, inline styles, and linked stylesheets can set story-title `color` and `font-size`; selectors support tag, ID, and class components with descendant and child combinators. Color accepts common names, hex, and integer `rgb()` values. Font sizes accept `px`, `pt`, `em`, `rem`, and `%`, bounded to 1–64 pixels; story rows expand to fit larger titles and keep metadata below them.
+This renderer targets Hacker News story tables: ranked `.athing` rows with `.titleline` titles and optional `.sitebit` domains, followed by `.subtext` metadata (`.score`, `.hnuser`, `.age`, and comments links). It draws a fixed Hacker News-inspired layout with an orange navigation bar, ranked titles, domains, and metadata using an embedded Go font. Embedded `<style>` rules, inline styles, and linked stylesheets can set story-title `color` and `font-size`; selectors support tag, ID, and class components with descendant and child combinators. Color accepts common names, hex, and integer `rgb()` values. Font sizes accept `px`, `pt`, `em`, `rem`, and `%`, bounded to 1–64 pixels; long titles wrap within the available width, and rows expand to keep titles and metadata visible.
 
 When fetching a page, the renderer loads up to 8 ordinary, same-origin HTTP(S) `rel="stylesheet"` links (including relative URLs and links resolved against the document’s `<base>` URL). Stylesheet redirects stay on the page’s origin; each stylesheet is limited to 1 MiB, all linked CSS to 4 MiB, and stylesheet fetching to 20 seconds. Linked CSS is not fetched for saved local HTML. Other resources, general page layout, images, and interactive browser behavior are not implemented.
 

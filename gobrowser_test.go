@@ -16,6 +16,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/opentype"
 )
 
 func TestParseStories(t *testing.T) {
@@ -441,6 +445,80 @@ func TestRenderPNGSeparatesLargeCSSStories(t *testing.T) {
 	}
 	if metadata.Max.Y >= nextTitle.Min.Y {
 		t.Errorf("large story metadata ends at y=%d, overlapping following title starting at y=%d", metadata.Max.Y, nextTitle.Min.Y)
+	}
+}
+
+func TestRenderPNGWrapsLongTitlesAtConstrainedWidth(t *testing.T) {
+	story := Story{
+		Rank:   "1",
+		Title:  "A detailed story title that should wrap across multiple lines without losing any of its words",
+		Domain: "example.com",
+		Score:  "10 points",
+		Style: textStyle{
+			color:    color.RGBA{R: 255, A: 255},
+			hasColor: true,
+			fontSize: 36,
+		},
+	}
+	parsedFont, err := opentype.Parse(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	titleFace, err := opentype.NewFace(parsedFont, &opentype.FaceOptions{Size: story.Style.fontSize, DPI: 72, Hinting: font.HintingFull})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer titleFace.Close()
+	metaFace, err := opentype.NewFace(parsedFont, &opentype.FaceOptions{Size: 11, DPI: 72, Hinting: font.HintingFull})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metaFace.Close()
+
+	const width = 640
+	layout := calculateStoryLayout(titleFace, metaFace, story, width-32-60)
+	if len(layout.titleLines) < 2 {
+		t.Fatalf("title wrapped into %d lines, want at least 2", len(layout.titleLines))
+	}
+	for index, line := range layout.titleLines {
+		if got := textWidth(titleFace, line); got > width-32-60 {
+			t.Errorf("wrapped title line %d width = %d, want at most %d", index+1, got, width-32-60)
+		}
+	}
+	if got, want := strings.Join(strings.Fields(strings.Join(layout.titleLines, " ")), " "), strings.Join(strings.Fields(story.Title), " "); got != want {
+		t.Errorf("wrapped title = %q, want all words from %q", got, story.Title)
+	}
+	if layout.domainInline {
+		t.Error("domain should move below a wrapped title")
+	}
+
+	var output bytes.Buffer
+	if err := renderPNG(&output, []Story{story}, width); err != nil {
+		t.Fatal(err)
+	}
+	renderedImage, err := png.Decode(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, ok := renderedImage.(*image.RGBA)
+	if !ok {
+		t.Fatalf("decoded PNG has type %T, want *image.RGBA", renderedImage)
+	}
+	if got, want := rendered.Bounds().Size(), image.Pt(width, 64+18+layout.height); got != want {
+		t.Errorf("image size = %v, want %v for wrapped title layout", got, want)
+	}
+
+	const rowTop = 14 + headerHeight + 12
+	titleInk := colorBounds(rendered, story.Style.color, image.Rect(68, rowTop, width, rendered.Bounds().Dy()))
+	metadataAndDomain := grayInkBounds(rendered, image.Rect(68, rowTop, width, rendered.Bounds().Dy()))
+	if titleInk.Empty() {
+		t.Fatal("wrapped title was not rendered")
+	}
+	if titleInk.Dy() <= titleFace.Metrics().Height.Ceil() {
+		t.Errorf("title ink height = %d, want multiple rendered lines", titleInk.Dy())
+	}
+	if metadataAndDomain.Empty() || titleInk.Max.Y >= metadataAndDomain.Min.Y {
+		t.Errorf("domain/metadata bounds %v are not below wrapped title bounds %v", metadataAndDomain, titleInk)
 	}
 }
 
