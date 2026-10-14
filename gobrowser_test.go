@@ -2,15 +2,20 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestParseStories(t *testing.T) {
@@ -122,6 +127,194 @@ func TestFetchPageRejectsHTTPError(t *testing.T) {
 
 	if _, err := fetchPage(t.Context(), server.URL); err == nil {
 		t.Fatal("fetchPage succeeded for a non-success status")
+	}
+}
+
+func TestFetchPageWithStylesResolvesBaseAndPreservesCascade(t *testing.T) {
+	var stylesheetRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/page":
+			_, _ = response.Write([]byte(`<!doctype html><html><head>
+				<base href="/assets/">
+				<link rel="preload stylesheet" href="css/site.css">
+				<style>.titleline a { color: blue; }</style>
+			</head><body><table>
+				<tr class="athing"><td><span class="titleline"><a href="/story">Linked style story</a></span></td></tr>
+				<tr><td class="subtext"><span class="score">1 point</span></td></tr>
+			</table></body></html>`))
+		case "/assets/css/site.css":
+			stylesheetRequests.Add(1)
+			_, _ = response.Write([]byte(".titleline a { color: red; font-size: 24px; }"))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+
+	page, stylesheets, err := fetchPageWithStyles(t.Context(), server.URL+"/page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stories, err := parseStoriesWithStyles(page, stylesheets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stylesheetRequests.Load(), int32(1); got != want {
+		t.Fatalf("stylesheet requests = %d, want %d", got, want)
+	}
+	if got, want := stories[0].Style.color, (color.RGBA{B: 255, A: 255}); got != want {
+		t.Errorf("title color = %#v, want inline blue %#v", got, want)
+	}
+	if got, want := stories[0].Style.fontSize, float64(24); got != want {
+		t.Errorf("title font size = %v, want linked stylesheet size %v", got, want)
+	}
+}
+
+func TestFetchLinkedStylesheetsRestrictsOriginAndRedirects(t *testing.T) {
+	var externalRequests atomic.Int32
+	external := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		externalRequests.Add(1)
+		_, _ = response.Write([]byte(".titleline a { color: red; }"))
+	}))
+	defer external.Close()
+
+	var sameOriginRequests atomic.Int32
+	var unexpectedRequests atomic.Int32
+	sameOrigin := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/redirect.css":
+			http.Redirect(response, request, external.URL+"/style.css", http.StatusFound)
+		case "/safe.css":
+			sameOriginRequests.Add(1)
+			_, _ = response.Write([]byte(".titleline a { color: blue; }"))
+		case "/media.css":
+			sameOriginRequests.Add(1)
+			_, _ = response.Write([]byte(".titleline a { font-size: 20px; }"))
+		default:
+			unexpectedRequests.Add(1)
+		}
+	}))
+	defer sameOrigin.Close()
+	pageURL, _ := url.Parse(sameOrigin.URL + "/page")
+	page := []byte(`<html><head>
+		<link rel="stylesheet" href="https://example.invalid/cross.css">
+		<link rel="stylesheet" href="/redirect.css">
+		<link rel="stylesheet" href="/safe.css">
+		<link rel="stylesheet" media="print" href="/print.css">
+		<link rel="stylesheet" media="screen, print" href="/media.css">
+		<link rel="stylesheet" disabled href="/disabled.css">
+		<link rel="stylesheet" type="text/less" href="/less.css">
+	</head></html>`)
+	stylesheets, err := fetchLinkedStylesheets(t.Context(), page, pageURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := externalRequests.Load(); got != 0 {
+		t.Errorf("cross-origin stylesheet requests = %d, want 0", got)
+	}
+	if got := sameOriginRequests.Load(); got != 2 {
+		t.Errorf("applicable same-origin stylesheet requests = %d, want 2", got)
+	}
+	if got := unexpectedRequests.Load(); got != 0 {
+		t.Errorf("requests for unsupported stylesheet links = %d, want 0", got)
+	}
+	if _, ok := stylesheets["/safe.css"]; !ok {
+		t.Errorf("same-origin stylesheet missing from result: %v", stylesheets)
+	}
+	if _, ok := stylesheets["/media.css"]; !ok {
+		t.Errorf("screen media stylesheet missing from result: %v", stylesheets)
+	}
+	if _, ok := stylesheets["/redirect.css"]; ok {
+		t.Error("stylesheet redirect to a different origin was accepted")
+	}
+}
+
+func TestFetchLinkedStylesheetsEnforcesCountAndByteLimits(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		if request.URL.Path == "/1.css" {
+			_, _ = response.Write([]byte(strings.Repeat("x", maxStylesheetSize+1)))
+			return
+		}
+		_, _ = response.Write([]byte(".titleline a { color: red; }"))
+	}))
+	defer server.Close()
+	pageURL, _ := url.Parse(server.URL + "/page")
+
+	var markup strings.Builder
+	markup.WriteString("<html><head>")
+	for index := 1; index <= maxStylesheetCount+1; index++ {
+		fmt.Fprintf(&markup, `<link rel="stylesheet" href="/%d.css">`, index)
+	}
+	markup.WriteString("</head></html>")
+	stylesheets, err := fetchLinkedStylesheets(t.Context(), []byte(markup.String()), pageURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := requests.Load(), int32(maxStylesheetCount); got != want {
+		t.Errorf("stylesheet requests = %d, want bounded count %d", got, want)
+	}
+	if _, ok := stylesheets["/1.css"]; ok {
+		t.Error("oversized stylesheet was accepted")
+	}
+	if len(stylesheets) != maxStylesheetCount-1 {
+		t.Errorf("accepted stylesheet count = %d, want %d", len(stylesheets), maxStylesheetCount-1)
+	}
+}
+
+func TestFetchLinkedStylesheetsEnforcesAggregateByteLimit(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		_, _ = response.Write([]byte(strings.Repeat("a", maxStylesheetSize)))
+	}))
+	defer server.Close()
+	pageURL, _ := url.Parse(server.URL + "/page")
+
+	var markup strings.Builder
+	markup.WriteString("<html><head>")
+	for index := 0; index < maxStylesheetCount; index++ {
+		fmt.Fprintf(&markup, `<link rel="stylesheet" href="/%d.css">`, index)
+	}
+	markup.WriteString("</head></html>")
+	stylesheets, err := fetchLinkedStylesheets(t.Context(), []byte(markup.String()), pageURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := requests.Load(), int32(maxStylesheetBytes/maxStylesheetSize); got != want {
+		t.Errorf("stylesheet requests = %d, want aggregate-byte-bounded count %d", got, want)
+	}
+	if len(stylesheets) != maxStylesheetBytes/maxStylesheetSize {
+		t.Errorf("accepted stylesheet count = %d, want %d", len(stylesheets), maxStylesheetBytes/maxStylesheetSize)
+	}
+}
+
+func TestFetchLinkedStylesheetsHonorsOverallTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/slow.css" {
+			<-request.Context().Done()
+			return
+		}
+		_, _ = response.Write([]byte(`<html><head><link rel="stylesheet" href="/slow.css"></head></html>`))
+	}))
+	defer server.Close()
+	pageURL, _ := url.Parse(server.URL + "/page")
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	stylesheets, err := fetchLinkedStylesheets(ctx,
+		[]byte(`<html><head><link rel="stylesheet" href="/slow.css"></head></html>`), pageURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Errorf("stylesheet fetching took %s after context deadline", elapsed)
+	}
+	if len(stylesheets) != 0 {
+		t.Errorf("stylesheets = %v, want no sheet after request timeout", stylesheets)
 	}
 }
 

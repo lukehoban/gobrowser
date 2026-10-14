@@ -30,11 +30,20 @@ func run() error {
 		return fmt.Errorf("-width must be between 640 and 4096")
 	}
 
-	page, err := readPage(context.Background(), *sourceURL, *inputPath)
+	var (
+		page         []byte
+		linkedStyles map[string]string
+		err          error
+	)
+	if *inputPath == "" {
+		page, linkedStyles, err = fetchPageWithStyles(context.Background(), *sourceURL)
+	} else {
+		page, err = readPage(context.Background(), *sourceURL, *inputPath)
+	}
 	if err != nil {
 		return err
 	}
-	stories, err := parseStories(page)
+	stories, err := parseStoriesWithStyles(page, linkedStyles)
 	if err != nil {
 		return err
 	}

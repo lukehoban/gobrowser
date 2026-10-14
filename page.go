@@ -14,7 +14,14 @@ import (
 	"golang.org/x/net/html"
 )
 
-const maxPageSize = 8 << 20
+const (
+	maxPageSize                = 8 << 20
+	maxStylesheetCount         = 8
+	maxStylesheetSize          = 1 << 20
+	maxStylesheetBytes         = 4 << 20
+	maxStylesheetFetchDuration = 20 * time.Second
+	maxHTTPRedirects           = 10
+)
 
 type Story struct {
 	Rank     string
@@ -28,46 +35,261 @@ type Story struct {
 }
 
 func fetchPage(ctx context.Context, rawURL string) ([]byte, error) {
-	parsedURL, err := url.Parse(rawURL)
+	page, _, err := fetchPageDocument(ctx, rawURL)
+	return page, err
+}
+
+func fetchPageWithStyles(ctx context.Context, rawURL string) ([]byte, map[string]string, error) {
+	page, pageURL, err := fetchPageDocument(ctx, rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("parse URL: %w", err)
+		return nil, nil, err
 	}
-	if (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
-		return nil, fmt.Errorf("URL must be an absolute HTTP or HTTPS URL")
+	stylesheets, err := fetchLinkedStylesheets(ctx, page, pageURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	return page, stylesheets, nil
+}
+
+func fetchPageDocument(ctx context.Context, rawURL string) ([]byte, *url.URL, error) {
+	parsedURL, err := parseHTTPURL(rawURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse URL: %w", err)
+	}
+
+	client := &http.Client{Timeout: maxStylesheetFetchDuration}
+	page, finalURL, err := fetchHTTPResource(ctx, client, parsedURL.String(), maxPageSize, "page")
+	if err != nil {
+		return nil, nil, err
+	}
+	return page, finalURL, nil
+}
+
+func fetchHTTPResource(ctx context.Context, client *http.Client, rawURL string, maxBytes int, resource string) ([]byte, *url.URL, error) {
+	parsedURL, err := parseHTTPURL(rawURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	if maxBytes < 0 {
+		return nil, nil, fmt.Errorf("invalid %s size limit", resource)
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsedURL.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, nil, fmt.Errorf("create %s request: %w", resource, err)
 	}
 	request.Header.Set("User-Agent", "gobrowser/0.1 (+https://github.com/lukehoban/gobrowser)")
 
-	client := &http.Client{Timeout: 20 * time.Second}
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("fetch page: %w", err)
+		return nil, nil, fmt.Errorf("fetch %s: %w", resource, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("fetch page: HTTP %s", response.Status)
+		return nil, nil, fmt.Errorf("fetch %s: HTTP %s", resource, response.Status)
 	}
 
-	page, err := io.ReadAll(io.LimitReader(response.Body, maxPageSize+1))
+	body, err := io.ReadAll(io.LimitReader(response.Body, int64(maxBytes)+1))
 	if err != nil {
-		return nil, fmt.Errorf("read page: %w", err)
+		return nil, nil, fmt.Errorf("read %s: %w", resource, err)
 	}
-	if len(page) > maxPageSize {
-		return nil, fmt.Errorf("page exceeds %d bytes", maxPageSize)
+	if len(body) > maxBytes {
+		return nil, nil, fmt.Errorf("%s exceeds %d bytes", resource, maxBytes)
 	}
-	return page, nil
+	finalURL := response.Request.URL
+	if finalURL == nil {
+		finalURL = parsedURL
+	}
+	finalURLCopy := *finalURL
+	return body, &finalURLCopy, nil
+}
+
+func parseHTTPURL(rawURL string) (*url.URL, error) {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	if (!strings.EqualFold(parsedURL.Scheme, "http") && !strings.EqualFold(parsedURL.Scheme, "https")) || parsedURL.Host == "" {
+		return nil, fmt.Errorf("URL must be an absolute HTTP or HTTPS URL")
+	}
+	parsedURL.Scheme = strings.ToLower(parsedURL.Scheme)
+	return parsedURL, nil
+}
+
+type linkedStylesheet struct {
+	href string
+	url  *url.URL
+}
+
+func fetchLinkedStylesheets(ctx context.Context, page []byte, pageURL *url.URL) (map[string]string, error) {
+	document, err := html.Parse(bytes.NewReader(page))
+	if err != nil {
+		return nil, fmt.Errorf("parse HTML for linked stylesheets: %w", err)
+	}
+	links := findLinkedStylesheets(document, pageURL)
+	stylesheets := make(map[string]string)
+	if len(links) == 0 {
+		return stylesheets, nil
+	}
+
+	fetchContext, cancel := context.WithTimeout(ctx, maxStylesheetFetchDuration)
+	defer cancel()
+	client := &http.Client{
+		Timeout: maxStylesheetFetchDuration,
+		CheckRedirect: func(request *http.Request, via []*http.Request) error {
+			if len(via) >= maxHTTPRedirects {
+				return fmt.Errorf("stopped after %d stylesheet redirects", maxHTTPRedirects)
+			}
+			if !sameOrigin(pageURL, request.URL) {
+				return fmt.Errorf("stylesheet redirect is outside the page origin")
+			}
+			return nil
+		},
+	}
+
+	totalBytes := 0
+	for _, link := range links {
+		if !sameOrigin(pageURL, link.url) {
+			continue
+		}
+		remaining := maxStylesheetBytes - totalBytes
+		if remaining <= 0 {
+			break
+		}
+		limit := min(maxStylesheetSize, remaining)
+		body, _, err := fetchHTTPResource(fetchContext, client, link.url.String(), limit, "stylesheet")
+		if err != nil {
+			if fetchContext.Err() != nil {
+				break
+			}
+			continue
+		}
+		stylesheets[link.href] = string(body)
+		totalBytes += len(body)
+	}
+	return stylesheets, nil
+}
+
+func findLinkedStylesheets(document *html.Node, pageURL *url.URL) []linkedStylesheet {
+	baseURL := documentBaseURL(document, pageURL)
+	var links []linkedStylesheet
+	for node := document; node != nil; node = nextNode(node) {
+		if node.Type != html.ElementNode || node.Data != "link" || !isStylesheetLink(node) {
+			continue
+		}
+		href := strings.TrimSpace(attribute(node, "href"))
+		if href == "" {
+			continue
+		}
+		reference, err := url.Parse(href)
+		if err != nil {
+			continue
+		}
+		resolved := baseURL.ResolveReference(reference)
+		if _, err := parseHTTPURL(resolved.String()); err != nil || resolved.User != nil {
+			continue
+		}
+		links = append(links, linkedStylesheet{href: href, url: resolved})
+		if len(links) == maxStylesheetCount {
+			break
+		}
+	}
+	return links
+}
+
+func documentBaseURL(document *html.Node, pageURL *url.URL) *url.URL {
+	for node := document; node != nil; node = nextNode(node) {
+		if node.Type != html.ElementNode || node.Data != "base" {
+			continue
+		}
+		href := strings.TrimSpace(attribute(node, "href"))
+		if href == "" {
+			continue
+		}
+		reference, err := url.Parse(href)
+		if err != nil {
+			continue
+		}
+		resolved := pageURL.ResolveReference(reference)
+		if _, err := parseHTTPURL(resolved.String()); err == nil {
+			return resolved
+		}
+	}
+	return pageURL
+}
+
+func isStylesheetLink(node *html.Node) bool {
+	if attributePresent(node, "disabled") {
+		return false
+	}
+	hasStylesheet := false
+	for _, rel := range strings.Fields(attribute(node, "rel")) {
+		switch strings.ToLower(rel) {
+		case "stylesheet":
+			hasStylesheet = true
+		case "alternate":
+			return false
+		}
+	}
+	if !hasStylesheet {
+		return false
+	}
+	linkType := strings.TrimSpace(strings.SplitN(attribute(node, "type"), ";", 2)[0])
+	if linkType != "" && !strings.EqualFold(linkType, "text/css") {
+		return false
+	}
+	media := strings.TrimSpace(strings.ToLower(attribute(node, "media")))
+	if media == "" {
+		return true
+	}
+	for _, medium := range strings.Split(media, ",") {
+		medium = strings.TrimSpace(medium)
+		if medium == "all" || medium == "screen" {
+			return true
+		}
+	}
+	return false
+}
+
+func sameOrigin(left, right *url.URL) bool {
+	if left == nil || right == nil || !strings.EqualFold(left.Scheme, right.Scheme) ||
+		!strings.EqualFold(left.Hostname(), right.Hostname()) || left.User != nil || right.User != nil {
+		return false
+	}
+	return effectivePort(left) == effectivePort(right)
+}
+
+func effectivePort(parsedURL *url.URL) string {
+	if port := parsedURL.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(parsedURL.Scheme, "https") {
+		return "443"
+	}
+	return "80"
+}
+
+func attributePresent(node *html.Node, name string) bool {
+	if node != nil {
+		for _, attribute := range node.Attr {
+			if attribute.Key == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func parseStories(page []byte) ([]Story, error) {
+	return parseStoriesWithStyles(page, nil)
+}
+
+func parseStoriesWithStyles(page []byte, linkedStyles map[string]string) ([]Story, error) {
 	document, err := html.Parse(bytes.NewReader(page))
 	if err != nil {
 		return nil, fmt.Errorf("parse HTML: %w", err)
 	}
-	rules := parseCSSRules(document)
+	rules := parseCSSRulesWithLinkedStyles(document, linkedStyles)
 
 	var stories []Story
 	for node := document.FirstChild; node != nil; node = nextNode(node) {

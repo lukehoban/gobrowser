@@ -59,32 +59,51 @@ type winningDeclaration struct {
 }
 
 func parseCSSRules(document *html.Node) []cssRule {
+	return parseCSSRulesWithLinkedStyles(document, nil)
+}
+
+func parseCSSRulesWithLinkedStyles(document *html.Node, linkedStyles map[string]string) []cssRule {
 	var rules []cssRule
 	order := 0
 	for node := document; node != nil; node = nextNode(node) {
-		if node.Type != html.ElementNode || node.Data != "style" {
+		if node.Type != html.ElementNode {
 			continue
 		}
-		stylesheet := stripCSSComments(textContent(node))
-		for _, ruleText := range strings.Split(stylesheet, "}") {
-			open := strings.IndexByte(ruleText, '{')
-			if open < 0 {
+		switch node.Data {
+		case "style":
+			rules = appendCSSRules(rules, textContent(node), &order)
+		case "link":
+			if isStylesheetLink(node) {
+				rules = appendCSSRules(rules, linkedStyles[strings.TrimSpace(attribute(node, "href"))], &order)
+			}
+		}
+		if len(rules) >= maxCSSRules {
+			return rules[:maxCSSRules]
+		}
+	}
+	return rules
+}
+
+func appendCSSRules(rules []cssRule, stylesheet string, order *int) []cssRule {
+	stylesheet = stripCSSComments(stylesheet)
+	for _, ruleText := range strings.Split(stylesheet, "}") {
+		open := strings.IndexByte(ruleText, '{')
+		if open < 0 {
+			continue
+		}
+		declarations := parseCSSDeclarations(ruleText[open+1:])
+		if len(declarations) == 0 {
+			continue
+		}
+		for _, selectorText := range strings.Split(ruleText[:open], ",") {
+			selector, ok := parseCSSSelector(strings.TrimSpace(selectorText))
+			if !ok {
 				continue
 			}
-			declarations := parseCSSDeclarations(ruleText[open+1:])
-			if len(declarations) == 0 {
-				continue
-			}
-			for _, selectorText := range strings.Split(ruleText[:open], ",") {
-				selector, ok := parseCSSSelector(strings.TrimSpace(selectorText))
-				if !ok {
-					continue
-				}
-				order++
-				rules = append(rules, cssRule{selector: selector, declarations: declarations, order: order})
-				if len(rules) >= maxCSSRules {
-					return rules
-				}
+			*order++
+			rules = append(rules, cssRule{selector: selector, declarations: declarations, order: *order})
+			if len(rules) >= maxCSSRules {
+				return rules
 			}
 		}
 	}
