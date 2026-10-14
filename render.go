@@ -138,7 +138,7 @@ func calculateStoryLayout(titleFace, metaFace font.Face, story Story, titleWidth
 	lastTitleBaseline := titleBaseline + (len(titleLines)-1)*lineHeight
 
 	metadataBaseline := lastTitleBaseline + titleMetrics.Descent.Ceil() + rowGap + metadataMetrics.Ascent.Ceil()
-	domainBaseline := 16
+	domainBaseline := lastTitleBaseline
 	if domain != "" && !domainInline {
 		domainBaseline = lastTitleBaseline + titleMetrics.Descent.Ceil() + rowGap + metadataMetrics.Ascent.Ceil()
 		metadataBaseline = domainBaseline + metadataMetrics.Descent.Ceil() + rowGap + metadataMetrics.Ascent.Ceil()

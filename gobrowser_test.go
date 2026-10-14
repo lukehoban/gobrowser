@@ -475,10 +475,23 @@ func TestRenderPNGWrapsLongTitlesAtConstrainedWidth(t *testing.T) {
 
 	var output bytes.Buffer
 	story := Story{
-		Rank:  "1",
-		Title: title,
-		Score: "10 points",
-		Style: textStyle{color: color.RGBA{R: 255, A: 255}, hasColor: true, fontSize: 40},
+		Rank:   "1",
+		Title:  title,
+		Domain: "example.com",
+		Score:  "10 points",
+		Style:  textStyle{color: color.RGBA{R: 255, A: 255}, hasColor: true, fontSize: 40},
+	}
+	metaFace, err := opentype.NewFace(parsedFont, &opentype.FaceOptions{Size: 11, DPI: 72, Hinting: font.HintingFull})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metaFace.Close()
+	layout := calculateStoryLayout(titleFace, metaFace, story, 220)
+	if !layout.domainInline {
+		t.Fatal("domain moved to a separate line despite inline space remaining")
+	}
+	if got, want := layout.domainBaseline, layout.titleBaseline+(len(layout.titleLines)-1)*layout.titleLineHeight; got != want {
+		t.Errorf("inline domain baseline = %d, want last wrapped-title baseline %d", got, want)
 	}
 	if err := renderPNG(&output, []Story{story}, 640); err != nil {
 		t.Fatal(err)
