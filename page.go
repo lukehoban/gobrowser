@@ -15,12 +15,12 @@ import (
 )
 
 const (
-	maxPageSize                 = 8 << 20
-	maxStylesheetCount          = 8
-	maxStylesheetSize           = 1 << 20
-	maxStylesheetBytes          = 4 << 20
-	maxStylesheetFetchDuration  = 20 * time.Second
-	maxHTTPRedirects            = 10
+	maxPageSize                = 8 << 20
+	maxStylesheetCount         = 8
+	maxStylesheetSize          = 1 << 20
+	maxStylesheetBytes         = 4 << 20
+	maxStylesheetFetchDuration = 20 * time.Second
+	maxHTTPRedirects           = 10
 )
 
 type Story struct {
@@ -172,7 +172,6 @@ func fetchLinkedStylesheets(ctx context.Context, page []byte, pageURL *url.URL) 
 func findLinkedStylesheets(document *html.Node, pageURL *url.URL) []linkedStylesheet {
 	baseURL := documentBaseURL(document, pageURL)
 	var links []linkedStylesheet
-	seen := make(map[string]bool)
 	for node := document; node != nil; node = nextNode(node) {
 		if node.Type != html.ElementNode || node.Data != "link" || !isStylesheetLink(node) {
 			continue
@@ -189,11 +188,6 @@ func findLinkedStylesheets(document *html.Node, pageURL *url.URL) []linkedStyles
 		if _, err := parseHTTPURL(resolved.String()); err != nil || resolved.User != nil {
 			continue
 		}
-		key := resolved.String()
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
 		links = append(links, linkedStylesheet{href: href, url: resolved})
 		if len(links) == maxStylesheetCount {
 			break
@@ -240,7 +234,20 @@ func isStylesheetLink(node *html.Node) bool {
 		return false
 	}
 	linkType := strings.TrimSpace(strings.SplitN(attribute(node, "type"), ";", 2)[0])
-	return linkType == "" || strings.EqualFold(linkType, "text/css")
+	if linkType != "" && !strings.EqualFold(linkType, "text/css") {
+		return false
+	}
+	media := strings.TrimSpace(strings.ToLower(attribute(node, "media")))
+	if media == "" {
+		return true
+	}
+	for _, medium := range strings.Split(media, ",") {
+		medium = strings.TrimSpace(medium)
+		if medium != "all" && medium != "screen" {
+			return false
+		}
+	}
+	return true
 }
 
 func sameOrigin(left, right *url.URL) bool {
@@ -270,7 +277,6 @@ func attributePresent(node *html.Node, name string) bool {
 		}
 	}
 	return false
-}
 }
 
 func parseStories(page []byte) ([]Story, error) {

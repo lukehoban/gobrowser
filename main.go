@@ -31,9 +31,9 @@ func run() error {
 	}
 
 	var (
-		page          []byte
-		linkedStyles  map[string]string
-		err           error
+		page         []byte
+		linkedStyles map[string]string
+		err          error
 	)
 	if *inputPath == "" {
 		page, linkedStyles, err = fetchPageWithStyles(context.Background(), *sourceURL)

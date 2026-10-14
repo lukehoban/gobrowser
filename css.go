@@ -74,7 +74,7 @@ func parseCSSRulesWithLinkedStyles(document *html.Node, linkedStyles map[string]
 			rules = appendCSSRules(rules, textContent(node), &order)
 		case "link":
 			if isStylesheetLink(node) {
-				rules = appendCSSRules(rules, linkedStyles[attribute(node, "href")], &order)
+				rules = appendCSSRules(rules, linkedStyles[strings.TrimSpace(attribute(node, "href"))], &order)
 			}
 		}
 		if len(rules) >= maxCSSRules {
