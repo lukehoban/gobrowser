@@ -8,6 +8,10 @@ The second example demonstrates embedded CSS changing story-title color and size
 
 ![Hacker News title rendered with embedded CSS](docs/hackernews-css.png)
 
+Long story titles wrap at narrower output widths:
+
+![A long Hacker News story title wrapped across multiple lines](docs/hackernews-wrapped-title.png)
+
 ## Run
 
 Render the live Hacker News homepage:
