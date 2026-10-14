@@ -172,6 +172,35 @@ func TestRenderPNGAppliesCSSPixels(t *testing.T) {
 	}
 }
 
+func TestRenderPNGConvertsCSSPointsToPixels(t *testing.T) {
+	page, err := os.ReadFile("testdata/hackernews-css.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	renderWithFontSize := func(fontSize string) *image.RGBA {
+		t.Helper()
+		styledPage := strings.Replace(string(page), "font-size: 24px", "font-size: "+fontSize, 1)
+		if styledPage == string(page) {
+			t.Fatal("fixture font size was not replaced")
+		}
+		stories, err := parseStories([]byte(styledPage))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := stories[0].Style.fontSize, float64(16); got != want {
+			t.Fatalf("font size %q resolved to %v pixels, want %v", fontSize, got, want)
+		}
+		return renderStoryForTest(t, stories[0])
+	}
+
+	pointSize := renderWithFontSize("12pt")
+	pixelSize := renderWithFontSize("16px")
+	if pointSize.Bounds() != pixelSize.Bounds() || !bytes.Equal(pointSize.Pix, pixelSize.Pix) {
+		t.Error("12pt rendering differs from equivalent 16px rendering")
+	}
+}
+
 func TestRenderPNGSeparatesLargeCSSStories(t *testing.T) {
 	stories := []Story{
 		{

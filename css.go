@@ -393,8 +393,11 @@ func resolveFontSize(value string, inherited float64) (float64, bool) {
 	value = strings.TrimSpace(strings.ToLower(value))
 	multiplier := float64(1)
 	switch {
-	case strings.HasSuffix(value, "px"), strings.HasSuffix(value, "pt"):
+	case strings.HasSuffix(value, "px"):
 		value = strings.TrimSpace(value[:len(value)-2])
+	case strings.HasSuffix(value, "pt"):
+		value = strings.TrimSpace(value[:len(value)-2])
+		multiplier = 96.0 / 72
 	case strings.HasSuffix(value, "rem"):
 		value = strings.TrimSpace(value[:len(value)-3])
 		multiplier = defaultTitleFontSize
