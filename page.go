@@ -109,9 +109,10 @@ func parseHTTPURL(rawURL string) (*url.URL, error) {
 	if err != nil {
 		return nil, err
 	}
-	if (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+	if (!strings.EqualFold(parsedURL.Scheme, "http") && !strings.EqualFold(parsedURL.Scheme, "https")) || parsedURL.Host == "" {
 		return nil, fmt.Errorf("URL must be an absolute HTTP or HTTPS URL")
 	}
+	parsedURL.Scheme = strings.ToLower(parsedURL.Scheme)
 	return parsedURL, nil
 }
 

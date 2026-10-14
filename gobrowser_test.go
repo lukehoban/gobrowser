@@ -180,6 +180,7 @@ func TestFetchLinkedStylesheetsRestrictsOriginAndRedirects(t *testing.T) {
 	defer external.Close()
 
 	var sameOriginRequests atomic.Int32
+	var unexpectedRequests atomic.Int32
 	sameOrigin := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/redirect.css":
@@ -187,6 +188,8 @@ func TestFetchLinkedStylesheetsRestrictsOriginAndRedirects(t *testing.T) {
 		case "/safe.css":
 			sameOriginRequests.Add(1)
 			_, _ = response.Write([]byte(".titleline a { color: blue; }"))
+		default:
+			unexpectedRequests.Add(1)
 		}
 	}))
 	defer sameOrigin.Close()
@@ -195,6 +198,9 @@ func TestFetchLinkedStylesheetsRestrictsOriginAndRedirects(t *testing.T) {
 		<link rel="stylesheet" href="https://example.invalid/cross.css">
 		<link rel="stylesheet" href="/redirect.css">
 		<link rel="stylesheet" href="/safe.css">
+		<link rel="stylesheet" media="print" href="/print.css">
+		<link rel="stylesheet" disabled href="/disabled.css">
+		<link rel="stylesheet" type="text/less" href="/less.css">
 	</head></html>`)
 	stylesheets, err := fetchLinkedStylesheets(t.Context(), page, pageURL)
 	if err != nil {
@@ -205,6 +211,9 @@ func TestFetchLinkedStylesheetsRestrictsOriginAndRedirects(t *testing.T) {
 	}
 	if got := sameOriginRequests.Load(); got != 1 {
 		t.Errorf("same-origin stylesheet requests = %d, want 1", got)
+	}
+	if got := unexpectedRequests.Load(); got != 0 {
+		t.Errorf("requests for unsupported stylesheet links = %d, want 0", got)
 	}
 	if _, ok := stylesheets["/safe.css"]; !ok {
 		t.Errorf("same-origin stylesheet missing from result: %v", stylesheets)
