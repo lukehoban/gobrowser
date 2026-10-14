@@ -450,8 +450,8 @@ func TestRenderPNGSeparatesLargeCSSStories(t *testing.T) {
 
 func TestRenderPNGWrapsLongTitlesAtConstrainedWidth(t *testing.T) {
 	story := Story{
-		Rank:  "1",
-		Title: "A detailed story title that should wrap across multiple lines without losing any of its words",
+		Rank:   "1",
+		Title:  "A detailed story title that should wrap across multiple lines without losing any of its words",
 		Domain: "example.com",
 		Score:  "10 points",
 		Style: textStyle{
