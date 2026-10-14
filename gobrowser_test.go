@@ -480,6 +480,11 @@ func TestRenderPNGWrapsLongTitlesAtConstrainedWidth(t *testing.T) {
 	if len(layout.titleLines) < 2 {
 		t.Fatalf("title wrapped into %d lines, want at least 2", len(layout.titleLines))
 	}
+	for index, line := range layout.titleLines {
+		if got := textWidth(titleFace, line); got > width-32-60 {
+			t.Errorf("wrapped title line %d width = %d, want at most %d", index+1, got, width-32-60)
+		}
+	}
 	if got, want := strings.Join(strings.Fields(strings.Join(layout.titleLines, " ")), " "), strings.Join(strings.Fields(story.Title), " "); got != want {
 		t.Errorf("wrapped title = %q, want all words from %q", got, story.Title)
 	}
