@@ -244,11 +244,11 @@ func isStylesheetLink(node *html.Node) bool {
 	}
 	for _, medium := range strings.Split(media, ",") {
 		medium = strings.TrimSpace(medium)
-		if medium != "all" && medium != "screen" {
-			return false
+		if medium == "all" || medium == "screen" {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 func sameOrigin(left, right *url.URL) bool {

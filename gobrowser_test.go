@@ -188,6 +188,9 @@ func TestFetchLinkedStylesheetsRestrictsOriginAndRedirects(t *testing.T) {
 		case "/safe.css":
 			sameOriginRequests.Add(1)
 			_, _ = response.Write([]byte(".titleline a { color: blue; }"))
+		case "/media.css":
+			sameOriginRequests.Add(1)
+			_, _ = response.Write([]byte(".titleline a { font-size: 20px; }"))
 		default:
 			unexpectedRequests.Add(1)
 		}
@@ -199,6 +202,7 @@ func TestFetchLinkedStylesheetsRestrictsOriginAndRedirects(t *testing.T) {
 		<link rel="stylesheet" href="/redirect.css">
 		<link rel="stylesheet" href="/safe.css">
 		<link rel="stylesheet" media="print" href="/print.css">
+		<link rel="stylesheet" media="screen, print" href="/media.css">
 		<link rel="stylesheet" disabled href="/disabled.css">
 		<link rel="stylesheet" type="text/less" href="/less.css">
 	</head></html>`)
@@ -209,14 +213,17 @@ func TestFetchLinkedStylesheetsRestrictsOriginAndRedirects(t *testing.T) {
 	if got := externalRequests.Load(); got != 0 {
 		t.Errorf("cross-origin stylesheet requests = %d, want 0", got)
 	}
-	if got := sameOriginRequests.Load(); got != 1 {
-		t.Errorf("same-origin stylesheet requests = %d, want 1", got)
+	if got := sameOriginRequests.Load(); got != 2 {
+		t.Errorf("applicable same-origin stylesheet requests = %d, want 2", got)
 	}
 	if got := unexpectedRequests.Load(); got != 0 {
 		t.Errorf("requests for unsupported stylesheet links = %d, want 0", got)
 	}
 	if _, ok := stylesheets["/safe.css"]; !ok {
 		t.Errorf("same-origin stylesheet missing from result: %v", stylesheets)
+	}
+	if _, ok := stylesheets["/media.css"]; !ok {
+		t.Errorf("screen media stylesheet missing from result: %v", stylesheets)
 	}
 	if _, ok := stylesheets["/redirect.css"]; ok {
 		t.Error("stylesheet redirect to a different origin was accepted")
