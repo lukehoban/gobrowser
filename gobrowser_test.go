@@ -159,8 +159,8 @@ func TestRenderPNGAppliesCSSPixels(t *testing.T) {
 	renderedStyled := renderStoryForTest(t, styledStories[0])
 	renderedDefault := renderStoryForTest(t, unstyledStory)
 
-	styledInk := inkBounds(renderedStyled, color.RGBA{R: 255, A: 255})
-	defaultInk := inkBounds(renderedDefault, textColor)
+	styledInk := colorBounds(renderedStyled, color.RGBA{R: 255, A: 255}, image.Rect(72, 50, 700, renderedStyled.Bounds().Dy()))
+	defaultInk := colorBounds(renderedDefault, textColor, image.Rect(72, 50, 700, renderedDefault.Bounds().Dy()))
 	if styledInk.Empty() {
 		t.Fatal("styled title has no red pixels")
 	}
@@ -169,6 +169,56 @@ func TestRenderPNGAppliesCSSPixels(t *testing.T) {
 	}
 	if got, want := styledInk.Dy() > defaultInk.Dy(), true; got != want {
 		t.Errorf("styled title ink height = %d, default = %d; font-size CSS did not enlarge rendered pixels", styledInk.Dy(), defaultInk.Dy())
+	}
+}
+
+func TestRenderPNGSeparatesLargeCSSStories(t *testing.T) {
+	stories := []Story{
+		{
+			Rank:  "1",
+			Title: "Large CSS title",
+			Score: "10 points",
+			Style: textStyle{color: color.RGBA{R: 255, A: 255}, hasColor: true, fontSize: maxTitleFontSize},
+		},
+		{Rank: "2", Title: "Next story", Score: "5 points"},
+	}
+	var output bytes.Buffer
+	if err := renderPNG(&output, stories, 800); err != nil {
+		t.Fatal(err)
+	}
+	renderedImage, err := png.Decode(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, ok := renderedImage.(*image.RGBA)
+	if !ok {
+		t.Fatalf("decoded PNG has type %T, want *image.RGBA", renderedImage)
+	}
+
+	const pageVerticalSpace = 64 + 18
+	if got, minimum := rendered.Bounds().Dy(), pageVerticalSpace+2*rowHeight; got <= minimum {
+		t.Fatalf("image height = %d, want more than %d for a large title", got, minimum)
+	}
+	firstRowHeight := rendered.Bounds().Dy() - pageVerticalSpace - rowHeight
+	secondRowTop := 14 + headerHeight + 12 + firstRowHeight
+
+	title := colorBounds(rendered, color.RGBA{R: 255, A: 255}, image.Rect(72, 60, 700, secondRowTop))
+	metadata := grayInkBounds(rendered, image.Rect(72, 60, 700, secondRowTop))
+	nextTitle := colorBounds(rendered, textColor, image.Rect(72, secondRowTop, 700, rendered.Bounds().Dy()))
+	if title.Empty() {
+		t.Fatal("large story title was not rendered")
+	}
+	if metadata.Empty() {
+		t.Fatalf("large story metadata was not rendered (image height %d, first row height %d, second row top %d)", rendered.Bounds().Dy(), firstRowHeight, secondRowTop)
+	}
+	if nextTitle.Empty() {
+		t.Fatal("following story title was not rendered")
+	}
+	if title.Max.Y >= metadata.Min.Y {
+		t.Errorf("large story title ends at y=%d, overlapping metadata starting at y=%d", title.Max.Y, metadata.Min.Y)
+	}
+	if metadata.Max.Y >= nextTitle.Min.Y {
+		t.Errorf("large story metadata ends at y=%d, overlapping following title starting at y=%d", metadata.Max.Y, nextTitle.Min.Y)
 	}
 }
 
@@ -200,12 +250,34 @@ func renderStoryForTest(t *testing.T, story Story) *image.RGBA {
 	return rgba
 }
 
-func inkBounds(rendered *image.RGBA, target color.RGBA) image.Rectangle {
+func colorBounds(rendered *image.RGBA, target color.RGBA, area image.Rectangle) image.Rectangle {
+	area = area.Intersect(rendered.Bounds())
 	bounds := image.Rectangle{}
-	for y := 50; y < 82; y++ {
-		for x := 72; x < 700; x++ {
+	for y := area.Min.Y; y < area.Max.Y; y++ {
+		for x := area.Min.X; x < area.Max.X; x++ {
 			pixel := color.RGBAModel.Convert(rendered.At(x, y)).(color.RGBA)
 			if pixel != target {
+				continue
+			}
+			if bounds.Empty() {
+				bounds = image.Rect(x, y, x+1, y+1)
+			} else {
+				bounds = bounds.Union(image.Rect(x, y, x+1, y+1))
+			}
+		}
+	}
+	return bounds
+}
+
+func grayInkBounds(rendered *image.RGBA, area image.Rectangle) image.Rectangle {
+	area = area.Intersect(rendered.Bounds())
+	bounds := image.Rectangle{}
+	for y := area.Min.Y; y < area.Max.Y; y++ {
+		for x := area.Min.X; x < area.Max.X; x++ {
+			pixel := color.RGBAModel.Convert(rendered.At(x, y)).(color.RGBA)
+			redGreen := int(pixel.R) - int(pixel.G)
+			greenBlue := int(pixel.G) - int(pixel.B)
+			if pixel.R < 80 || pixel.R > 200 || redGreen < -5 || redGreen > 5 || greenBlue < -5 || greenBlue > 5 {
 				continue
 			}
 			if bounds.Empty() {
