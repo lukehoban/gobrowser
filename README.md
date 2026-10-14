@@ -12,6 +12,12 @@ Long story titles wrap at narrower output widths:
 
 ![A long Hacker News story title wrapped across multiple lines](docs/hackernews-wrapped-title.png)
 
+Reference capture of the actual Hacker News homepage (Chromium, full page at a 1280px viewport):
+
+![Captured Hacker News homepage reference](docs/hackernews-reference.png)
+
+The frozen source HTML and same-origin resources are in [`testdata/hn-snapshot`](testdata/hn-snapshot). The image above is a browser reference, not a gobrowser render; full-page layout support is tracked under [epic #1](https://github.com/lukehoban/gobrowser/issues/1).
+
 ## Run
 
 Render the live Hacker News homepage:

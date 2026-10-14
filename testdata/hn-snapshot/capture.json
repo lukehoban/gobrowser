@@ -1,0 +1,24 @@
+{
+  "source": "https://news.ycombinator.com/",
+  "captured_at_utc": "2026-10-14T07:10:36Z",
+  "viewport": {
+    "width": 1280,
+    "height": 900,
+    "device_scale_factor": 1
+  },
+  "reference_image": {
+    "path": "docs/hackernews-reference.png",
+    "width": 1280,
+    "height": 1209,
+    "capture": "full page"
+  },
+  "browser": "Chromium 154",
+  "files": [
+    "index.html",
+    "news.css",
+    "hn.js",
+    "y18.svg",
+    "s.gif",
+    "triangle.svg"
+  ]
+}
