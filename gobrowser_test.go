@@ -506,7 +506,9 @@ func TestRenderPNGWrapsLongTitlesAtConstrainedWidth(t *testing.T) {
 	}
 
 	titleInk := colorBounds(rendered, color.RGBA{R: 255, A: 255}, image.Rect(68, 60, 632, rendered.Bounds().Dy()))
-	metadataInk := grayInkBounds(rendered, image.Rect(68, 60, 632, rendered.Bounds().Dy()))
+	renderLayout := calculateStoryLayout(titleFace, metaFace, story, 548)
+	metadataBaseline := 60 + renderLayout.metadataBaseline
+	metadataInk := grayInkBounds(rendered, image.Rect(68, metadataBaseline-12, 632, metadataBaseline+2))
 	if titleInk.Empty() {
 		t.Fatal("wrapped title was not rendered")
 	}
