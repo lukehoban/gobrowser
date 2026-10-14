@@ -494,6 +494,14 @@ func TestRenderPNGWrapsLongCSSStoryTitles(t *testing.T) {
 	if got := strings.Join(lines, " "); got != title {
 		t.Errorf("wrapped title = %q, want all original text %q", got, title)
 	}
+	longWord := strings.Repeat("x", 200)
+	longWordLines := wrapText(testTitleFace(t, stories[0].Style.fontSize), longWord, 100)
+	if got := strings.Join(longWordLines, ""); got != longWord {
+		t.Errorf("wrapped long word lost text: got %d runes, want %d", len([]rune(got)), len([]rune(longWord)))
+	}
+	if len(longWordLines) < 2 {
+		t.Errorf("wrapped long word into %d lines, want multiple", len(longWordLines))
+	}
 }
 
 func TestRenderPNGRejectsInvalidInput(t *testing.T) {

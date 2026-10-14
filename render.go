@@ -262,17 +262,26 @@ func wrapText(face font.Face, text string, maxWidth int) []string {
 			line = ""
 		}
 
+		if textWidth(face, word) <= maxWidth {
+			line = word
+			continue
+		}
 		runes := []rune(word)
 		for len(runes) > 0 {
-			end := len(runes)
-			for end > 1 && textWidth(face, string(runes[:end])) > maxWidth {
-				end--
+			low, high := 1, len(runes)
+			for low < high {
+				middle := low + (high-low+1)/2
+				if textWidth(face, string(runes[:middle])) <= maxWidth {
+					low = middle
+				} else {
+					high = middle - 1
+				}
 			}
-			if textWidth(face, string(runes[:end])) > maxWidth {
-				end = 1
+			if textWidth(face, string(runes[:low])) > maxWidth {
+				low = 1
 			}
-			chunk := string(runes[:end])
-			runes = runes[end:]
+			chunk := string(runes[:low])
+			runes = runes[low:]
 			if len(runes) == 0 {
 				line = chunk
 			} else {
