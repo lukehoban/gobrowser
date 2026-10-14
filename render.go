@@ -25,7 +25,11 @@ const (
 
 type storyLayout struct {
 	height           int
+	titleLines       []string
+	titleLineHeight  int
 	titleBaseline    int
+	domainBaseline   int
+	domainInline     bool
 	metadataBaseline int
 }
 
@@ -88,7 +92,7 @@ func renderPNG(output io.Writer, stories []Story, width int) error {
 		if err != nil {
 			return err
 		}
-		layouts[index] = calculateStoryLayout(titleFace, metaFace)
+		layouts[index] = calculateStoryLayout(titleFace, metaFace, story, contentWidth-60)
 		height += layouts[index].height
 	}
 	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
@@ -108,18 +112,40 @@ func renderPNG(output io.Writer, stories []Story, width int) error {
 	return png.Encode(output, canvas)
 }
 
-func calculateStoryLayout(titleFace, metaFace font.Face) storyLayout {
+func calculateStoryLayout(titleFace, metaFace font.Face, story Story, titleWidth int) storyLayout {
 	titleMetrics := titleFace.Metrics()
 	metadataMetrics := metaFace.Metrics()
+	titleLines := wrapText(titleFace, story.Title, titleWidth)
+	titleLineHeight := max(titleMetrics.Height.Ceil(), titleMetrics.Ascent.Ceil()+titleMetrics.Descent.Ceil())
+	if titleLineHeight < 1 {
+		titleLineHeight = 1
+	}
 	titleBaseline := rowPadding + titleMetrics.Ascent.Ceil()
-	metadataBaseline := titleBaseline + titleMetrics.Descent.Ceil() + rowGap + metadataMetrics.Ascent.Ceil()
+	titleBottom := titleBaseline + (len(titleLines)-1)*titleLineHeight + titleMetrics.Descent.Ceil()
+	domain := ""
+	if story.Domain != "" {
+		domain = "(" + story.Domain + ")"
+	}
+	domainInline := domain != "" &&
+		len(titleLines) == 1 &&
+		textWidth(titleFace, titleLines[0])+6+textWidth(metaFace, domain) <= titleWidth
+	domainBaseline := 0
+	metadataBaseline := titleBottom + rowGap + metadataMetrics.Ascent.Ceil()
+	if domain != "" && !domainInline {
+		domainBaseline = metadataBaseline
+		metadataBaseline = domainBaseline + metadataMetrics.Descent.Ceil() + rowGap + metadataMetrics.Ascent.Ceil()
+	}
 	height := metadataBaseline + metadataMetrics.Descent.Ceil() + rowBottom
 	if height < rowHeight {
 		height = rowHeight
 	}
 	return storyLayout{
 		height:           height,
+		titleLines:       titleLines,
+		titleLineHeight:  titleLineHeight,
 		titleBaseline:    titleBaseline,
+		domainBaseline:   domainBaseline,
+		domainInline:     domainInline,
 		metadataBaseline: metadataBaseline,
 	}
 }
@@ -150,18 +176,21 @@ func drawStory(canvas *image.RGBA, left, width, top int, story Story, titleFace,
 		domain = "(" + story.Domain + ")"
 	}
 	available := left + width - titleX - 8
-	if domain != "" {
-		available -= textWidth(metaFace, domain) + 6
-	}
-	title := fitText(titleFace, story.Title, available)
 	titleColor := textColor
 	if story.Style.hasColor {
 		titleColor = story.Style.color
 	}
-	drawText(canvas, titleFace, titleX, top+layout.titleBaseline, title, titleColor)
+	for lineIndex, line := range layout.titleLines {
+		baseline := top + layout.titleBaseline + lineIndex*layout.titleLineHeight
+		drawText(canvas, titleFace, titleX, baseline, line, titleColor)
+	}
 	if domain != "" {
-		domainX := titleX + textWidth(titleFace, title) + 6
-		drawText(canvas, metaFace, domainX, top+16, fitText(metaFace, domain, left+width-domainX-8), mutedColor)
+		if layout.domainInline {
+			domainX := titleX + textWidth(titleFace, layout.titleLines[0]) + 6
+			drawText(canvas, metaFace, domainX, top+layout.titleBaseline, fitText(metaFace, domain, left+width-domainX-8), mutedColor)
+		} else {
+			drawText(canvas, metaFace, titleX, top+layout.domainBaseline, fitText(metaFace, domain, available), mutedColor)
+		}
 	}
 
 	metadata := make([]string, 0, 4)
@@ -210,6 +239,54 @@ func fitText(face font.Face, text string, maxWidth int) string {
 		runes = runes[:len(runes)-1]
 	}
 	return string(runes) + ellipsis
+}
+
+func wrapText(face font.Face, text string, maxWidth int) []string {
+	if textWidth(face, text) <= maxWidth {
+		return []string{text}
+	}
+	if maxWidth <= 0 {
+		return []string{text}
+	}
+
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{""}
+	}
+	lines := make([]string, 0, len(words))
+	line := ""
+	for _, word := range words {
+		candidate := word
+		if line != "" {
+			candidate = line + " " + word
+		}
+		if textWidth(face, candidate) <= maxWidth {
+			line = candidate
+			continue
+		}
+		if line != "" {
+			lines = append(lines, line)
+			line = ""
+		}
+		if textWidth(face, word) <= maxWidth {
+			line = word
+			continue
+		}
+
+		runes := []rune(word)
+		for len(runes) > 0 {
+			end := 1
+			for end < len(runes) && textWidth(face, string(runes[:end+1])) <= maxWidth {
+				end++
+			}
+			lines = append(lines, string(runes[:end]))
+			runes = runes[end:]
+		}
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func drawTriangle(canvas *image.RGBA, x, y int) {
