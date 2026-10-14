@@ -16,6 +16,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/opentype"
 )
 
 func TestParseStories(t *testing.T) {
@@ -444,6 +448,54 @@ func TestRenderPNGSeparatesLargeCSSStories(t *testing.T) {
 	}
 }
 
+func TestRenderPNGWrapsLongCSSStoryTitles(t *testing.T) {
+	title := "A deliberately long story title wraps at a constrained width and keeps all of its words visible"
+	stories := []Story{
+		{
+			Rank:   "1",
+			Title:  title,
+			Domain: "example.com",
+			Score:  "10 points",
+			User:   "reader",
+			Style:  textStyle{color: color.RGBA{R: 255, A: 255}, hasColor: true, fontSize: 32},
+		},
+		{Rank: "2", Title: "Next story"},
+	}
+	var output bytes.Buffer
+	if err := renderPNG(&output, stories, 640); err != nil {
+		t.Fatal(err)
+	}
+	renderedImage, err := png.Decode(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := renderedImage.(*image.RGBA)
+
+	titleBounds := colorBounds(rendered, color.RGBA{R: 255, A: 255}, image.Rect(72, 60, 620, rendered.Bounds().Dy()))
+	if titleBounds.Empty() {
+		t.Fatal("wrapped story title was not rendered")
+	}
+	if titleBounds.Dy() < 50 {
+		t.Errorf("title ink height = %d, want multiple rendered lines", titleBounds.Dy())
+	}
+	const pageVerticalSpace = 64 + 18
+	firstRowHeight := rendered.Bounds().Dy() - pageVerticalSpace - rowHeight
+	secondRowTop := 14 + headerHeight + 12 + firstRowHeight
+	grayBounds := grayInkBounds(rendered, image.Rect(72, titleBounds.Max.Y, 620, secondRowTop))
+	if grayBounds.Empty() {
+		t.Fatal("domain or metadata below the wrapped title was not rendered")
+	}
+	nextTitleBounds := colorBounds(rendered, textColor, image.Rect(72, secondRowTop, 620, rendered.Bounds().Dy()))
+	if nextTitleBounds.Empty() {
+		t.Fatal("following story title was not rendered below the wrapped story metadata")
+	}
+
+	lines := wrapText(testTitleFace(t, stories[0].Style.fontSize), title, 500)
+	if got := strings.Join(lines, " "); got != title {
+		t.Errorf("wrapped title = %q, want all original text %q", got, title)
+	}
+}
+
 func TestRenderPNGRejectsInvalidInput(t *testing.T) {
 	if err := renderPNG(&bytes.Buffer{}, nil, 800); err == nil {
 		t.Fatal("renderPNG succeeded without stories")
@@ -453,6 +505,20 @@ func TestRenderPNGRejectsInvalidInput(t *testing.T) {
 			t.Errorf("renderPNG succeeded with unsupported width %d", width)
 		}
 	}
+}
+
+func testTitleFace(t *testing.T, size float64) font.Face {
+	t.Helper()
+	parsedFont, err := opentype.Parse(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := opentype.NewFace(parsedFont, &opentype.FaceOptions{Size: size, DPI: 72, Hinting: font.HintingFull})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { face.Close() })
+	return face
 }
 
 func renderStoryForTest(t *testing.T, story Story) *image.RGBA {
