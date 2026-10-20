@@ -20,6 +20,7 @@ import (
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/goregular"
 	"golang.org/x/image/font/opentype"
+	"golang.org/x/net/html"
 )
 
 func TestParseStories(t *testing.T) {
@@ -99,6 +100,87 @@ func TestInlineCSSOverridesStylesheet(t *testing.T) {
 	}
 	if got, want := stories[0].Style.fontSize, float64(18); got != want {
 		t.Errorf("inline title font size = %v, want %v", got, want)
+	}
+}
+
+func TestParseStoriesAppliesLinkPseudoClass(t *testing.T) {
+	page := `<!doctype html><html><head><style>
+td { color: #828282; }
+.title { color: #828282; }
+a:link { color: #000000; }
+.titleline a:visited { color: red; }
+.titleline > a:hover { color: blue; }
+.subtext a:link, .subtext a:visited { color: #828282; }
+</style></head><body><table>
+<tr class="athing submission" id="1">
+<td class="title"><span class="rank">1.</span></td>
+<td class="title"><span class="titleline"><a href="https://example.com/">Linked title</a></span></td>
+</tr>
+<tr><td class="subtext"><span class="score">1 point</span> by <a class="hnuser">gopher</a> <span class="age">1 hour ago</span></td></tr>
+</table></body></html>`
+
+	stories, err := parseStories([]byte(page))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stories) != 1 {
+		t.Fatalf("got %d stories, want 1", len(stories))
+	}
+	if got, want := stories[0].Style.color, (color.RGBA{A: 255}); got != want || !stories[0].Style.hasColor {
+		t.Errorf("title color = %#v (set %v), want %#v", got, stories[0].Style.hasColor, want)
+	}
+}
+
+func TestCSSLinkPseudoClassSelectors(t *testing.T) {
+	element := func(tag string, attributes ...html.Attribute) *html.Node {
+		return &html.Node{Type: html.ElementNode, Data: tag, Attr: attributes}
+	}
+	href := html.Attribute{Key: "href", Val: "item?id=1"}
+	emptyHref := html.Attribute{Key: "href"}
+	class := html.Attribute{Key: "class", Val: "storylink"}
+	link := element("a", href, class)
+	area := element("area", href)
+	anchor := element("a", class)
+	span := element("span", href)
+
+	tests := []struct {
+		selector    string
+		specificity specificity
+		matches     []*html.Node
+		misses      []*html.Node
+	}{
+		{"a:link", specificity{classes: 1, tags: 1}, []*html.Node{link, element("a", emptyHref)}, []*html.Node{anchor, span, area}},
+		{":link", specificity{classes: 1}, []*html.Node{link, area}, []*html.Node{anchor, span}},
+		{"*:any-link", specificity{classes: 1}, []*html.Node{link, area}, []*html.Node{anchor, span}},
+		{"A:LINK.storylink", specificity{classes: 2, tags: 1}, []*html.Node{link}, []*html.Node{anchor, area}},
+		{"a:visited", specificity{classes: 1, tags: 1}, nil, []*html.Node{link, anchor}},
+		{":link:visited", specificity{classes: 2}, nil, []*html.Node{link}},
+	}
+	for _, test := range tests {
+		selector, ok := parseCSSSelector(test.selector)
+		if !ok {
+			t.Errorf("parseCSSSelector(%q) rejected a supported selector", test.selector)
+			continue
+		}
+		if selector.specificity != test.specificity {
+			t.Errorf("%q specificity = %+v, want %+v", test.selector, selector.specificity, test.specificity)
+		}
+		for _, node := range test.matches {
+			if !selector.matches(node) {
+				t.Errorf("%q did not match <%s %v>", test.selector, node.Data, node.Attr)
+			}
+		}
+		for _, node := range test.misses {
+			if selector.matches(node) {
+				t.Errorf("%q matched <%s %v>", test.selector, node.Data, node.Attr)
+			}
+		}
+	}
+
+	for _, unsupported := range []string{"a:hover", "a::before", "a:", ":", "a:link:hover", "a:linked", ":link a:focus"} {
+		if _, ok := parseCSSSelector(unsupported); ok {
+			t.Errorf("parseCSSSelector(%q) accepted an unsupported selector", unsupported)
+		}
 	}
 }
 

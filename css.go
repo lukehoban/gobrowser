@@ -42,6 +42,8 @@ type cssCompound struct {
 	tag     string
 	id      string
 	classes []string
+	link    bool
+	never   bool
 }
 
 type specificity struct {
@@ -216,9 +218,25 @@ func parseCSSCompound(source string) (cssCompound, specificity, bool) {
 				return cssCompound{}, specificity{}, false
 			}
 			index++
-			if index < len(source) && source[index] != '.' && source[index] != '#' {
+			if index < len(source) && source[index] != '.' && source[index] != '#' && source[index] != ':' {
 				return cssCompound{}, specificity{}, false
 			}
+		case ':':
+			index++
+			start := index
+			for index < len(source) && isCSSIdentifier(source[index]) {
+				index++
+			}
+			switch strings.ToLower(source[start:index]) {
+			case "link", "any-link":
+				// Without history, every link is unvisited.
+				compound.link = true
+			case "visited":
+				compound.never = true
+			default:
+				return cssCompound{}, specificity{}, false
+			}
+			score.classes++
 		case '.', '#':
 			kind := source[index]
 			index++
@@ -288,7 +306,10 @@ func (selector cssSelector) matches(node *html.Node) bool {
 }
 
 func (compound cssCompound) matches(node *html.Node) bool {
-	if node == nil || node.Type != html.ElementNode {
+	if node == nil || node.Type != html.ElementNode || compound.never {
+		return false
+	}
+	if compound.link && !isHyperlink(node) {
 		return false
 	}
 	if compound.tag != "" && node.Data != compound.tag {
@@ -303,6 +324,10 @@ func (compound cssCompound) matches(node *html.Node) bool {
 		}
 	}
 	return true
+}
+
+func isHyperlink(node *html.Node) bool {
+	return (node.Data == "a" || node.Data == "area") && attributePresent(node, "href")
 }
 
 func resolveTitleStyle(node *html.Node, rules []cssRule) textStyle {
