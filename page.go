@@ -285,11 +285,15 @@ func parseStories(page []byte) ([]Story, error) {
 }
 
 func parseStoriesWithStyles(page []byte, linkedStyles map[string]string) ([]Story, error) {
+	return parseStoriesForViewport(page, linkedStyles, defaultViewportWidth)
+}
+
+func parseStoriesForViewport(page []byte, linkedStyles map[string]string, viewportWidth int) ([]Story, error) {
 	document, err := html.Parse(bytes.NewReader(page))
 	if err != nil {
 		return nil, fmt.Errorf("parse HTML: %w", err)
 	}
-	rules := parseCSSRulesWithLinkedStyles(document, linkedStyles)
+	rules := parseCSSRulesForViewport(document, linkedStyles, viewportWidth)
 
 	var stories []Story
 	for node := document.FirstChild; node != nil; node = nextNode(node) {
