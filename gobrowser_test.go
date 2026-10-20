@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -99,6 +100,100 @@ func TestInlineCSSOverridesStylesheet(t *testing.T) {
 	}
 	if got, want := stories[0].Style.fontSize, float64(18); got != want {
 		t.Errorf("inline title font size = %v, want %v", got, want)
+	}
+}
+
+func TestMediaRulesApplyOnlyToMatchingViewports(t *testing.T) {
+	// Mirrors news.css: a desktop size, then a mobile override inside @media.
+	page := []byte(`<html><head><style>
+		.title { font-size: 10pt; color: #828282; }
+		@media only screen
+		and (min-width : 300px)
+		and (max-width : 750px) {
+		  .title { font-size: 11pt; }
+		  .titleline a { color: red; }
+		}
+		@media only screen and (-webkit-min-device-pixel-ratio: 2), only screen and (min-device-pixel-ratio: 2) {
+		  .titleline a { color: green; }
+		}
+		@media print { .titleline a { color: blue; } }
+	</style></head><body><table>
+		<tr class="athing"><td class="title"><span class="titleline"><a href="/story">Media story</a></span></td></tr>
+	</table></body></html>`)
+
+	for _, test := range []struct {
+		width    int
+		fontSize float64
+		color    color.RGBA
+	}{
+		{width: 1280, fontSize: 10 * (96.0 / 72), color: color.RGBA{R: 0x82, G: 0x82, B: 0x82, A: 255}},
+		{width: 750, fontSize: 11 * (96.0 / 72), color: color.RGBA{R: 255, A: 255}},
+		{width: 700, fontSize: 11 * (96.0 / 72), color: color.RGBA{R: 255, A: 255}},
+	} {
+		stories, err := parseStoriesForViewport(page, nil, test.width)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := stories[0].Style.fontSize; math.Abs(got-test.fontSize) > 1e-9 {
+			t.Errorf("width %d: title font size = %v, want %v", test.width, got, test.fontSize)
+		}
+		if got := stories[0].Style.color; got != test.color {
+			t.Errorf("width %d: title color = %#v, want %#v", test.width, got, test.color)
+		}
+	}
+}
+
+func TestUnsupportedAtRulesAreSkippedWhole(t *testing.T) {
+	page := []byte(`<html><head><style>
+		@import url("other.css");
+		@font-face { font-family: X; src: url(x.woff); }
+		@keyframes pulse { from { color: green; } to { color: green; } }
+		@supports (display: grid) { .titleline a { color: green; } }
+		@media screen { @media (min-width: 640px) { .titleline a { font-size: 20px; } } }
+		.titleline a { color: red; }
+	</style></head><body><table>
+		<tr class="athing"><td><span class="titleline"><a href="/story">At-rule story</a></span></td></tr>
+	</table></body></html>`)
+
+	stories, err := parseStoriesForViewport(page, nil, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stories[0].Style.color, (color.RGBA{R: 255, A: 255}); got != want {
+		t.Errorf("title color = %#v, want %#v from the rule after the at-rules", got, want)
+	}
+	if got, want := stories[0].Style.fontSize, float64(20); got != want {
+		t.Errorf("title font size = %v, want nested matching @media size %v", got, want)
+	}
+}
+
+func TestMediaQueryMatches(t *testing.T) {
+	for _, test := range []struct {
+		query string
+		width int
+		want  bool
+	}{
+		{"", 1000, true},
+		{"all", 1000, true},
+		{"screen and (max-width: 750px)", 750, true},
+		{"screen and (max-width: 750px)", 751, false},
+		{"(min-width: 40em)", 640, true},
+		{"(min-width: 40em)", 639, false},
+		{"(width: 1000px)", 1000, true},
+		{"print", 1000, false},
+		{"print, screen", 1000, true},
+		{"not print", 1000, true},
+		{"not screen and (max-width: 750px)", 1000, true},
+		{"not (max-width: 750px)", 700, false},
+		{"only screen and (orientation: landscape)", 1000, false},
+		{"not screen and (orientation: landscape)", 1000, false},
+		{"screen and", 1000, false},
+		{"only (min-width: 1px)", 1000, false},
+		{"screen (min-width: 1px)", 1000, false},
+	} {
+		if got := mediaQueryListMatches(test.query, test.width); got != test.want {
+			t.Errorf("mediaQueryListMatches(%q, %d) = %v, want %v", test.query, test.width, got, test.want)
+		}
 	}
 }
 

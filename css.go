@@ -13,6 +13,8 @@ const (
 	maxTitleFontSize     = 64
 	maxCSSRules          = 1024
 	maxSelectorParts     = 8
+	maxCSSBlockDepth     = 4
+	defaultViewportWidth = 1000
 )
 
 type textStyle struct {
@@ -63,6 +65,12 @@ func parseCSSRules(document *html.Node) []cssRule {
 }
 
 func parseCSSRulesWithLinkedStyles(document *html.Node, linkedStyles map[string]string) []cssRule {
+	return parseCSSRulesForViewport(document, linkedStyles, defaultViewportWidth)
+}
+
+// parseCSSRulesForViewport collects style rules from embedded and linked
+// stylesheets, applying @media blocks only when they match viewportWidth.
+func parseCSSRulesForViewport(document *html.Node, linkedStyles map[string]string, viewportWidth int) []cssRule {
 	var rules []cssRule
 	order := 0
 	for node := document; node != nil; node = nextNode(node) {
@@ -71,10 +79,10 @@ func parseCSSRulesWithLinkedStyles(document *html.Node, linkedStyles map[string]
 		}
 		switch node.Data {
 		case "style":
-			rules = appendCSSRules(rules, textContent(node), &order)
+			rules = appendCSSRules(rules, textContent(node), viewportWidth, &order)
 		case "link":
 			if isStylesheetLink(node) {
-				rules = appendCSSRules(rules, linkedStyles[strings.TrimSpace(attribute(node, "href"))], &order)
+				rules = appendCSSRules(rules, linkedStyles[strings.TrimSpace(attribute(node, "href"))], viewportWidth, &order)
 			}
 		}
 		if len(rules) >= maxCSSRules {
@@ -84,30 +92,222 @@ func parseCSSRulesWithLinkedStyles(document *html.Node, linkedStyles map[string]
 	return rules
 }
 
-func appendCSSRules(rules []cssRule, stylesheet string, order *int) []cssRule {
-	stylesheet = stripCSSComments(stylesheet)
-	for _, ruleText := range strings.Split(stylesheet, "}") {
-		open := strings.IndexByte(ruleText, '{')
-		if open < 0 {
+func appendCSSRules(rules []cssRule, stylesheet string, viewportWidth int, order *int) []cssRule {
+	return appendCSSBlock(rules, stripCSSComments(stylesheet), viewportWidth, 0, order)
+}
+
+// appendCSSBlock parses a sequence of style rules and at-rules. Each block is
+// consumed as a unit, so unsupported at-rules are skipped whole and @media
+// contents are only parsed when the query matches the viewport.
+func appendCSSBlock(rules []cssRule, source string, viewportWidth, depth int, order *int) []cssRule {
+	for len(rules) < maxCSSRules {
+		boundary := strings.IndexAny(source, "{;}")
+		if boundary < 0 {
+			break
+		}
+		prelude := strings.TrimSpace(source[:boundary])
+		if source[boundary] != '{' {
+			// Statement at-rules such as @import end at ';'; stray '}' are ignored.
+			source = source[boundary+1:]
 			continue
 		}
-		declarations := parseCSSDeclarations(ruleText[open+1:])
-		if len(declarations) == 0 {
+		var body string
+		body, source = cssBlockBody(source[boundary+1:])
+		if strings.HasPrefix(prelude, "@") {
+			if query, ok := mediaAtRuleQuery(prelude); ok && depth < maxCSSBlockDepth && mediaQueryListMatches(query, viewportWidth) {
+				rules = appendCSSBlock(rules, body, viewportWidth, depth+1, order)
+			}
 			continue
 		}
-		for _, selectorText := range strings.Split(ruleText[:open], ",") {
-			selector, ok := parseCSSSelector(strings.TrimSpace(selectorText))
-			if !ok {
-				continue
+		rules = appendStyleRule(rules, prelude, body, order)
+	}
+	return rules
+}
+
+// cssBlockBody returns the contents of a block whose opening brace has already
+// been consumed, and the source following its matching closing brace. An
+// unterminated block extends to the end of the source.
+func cssBlockBody(source string) (string, string) {
+	depth := 0
+	for index := 0; index < len(source); index++ {
+		switch source[index] {
+		case '{':
+			depth++
+		case '}':
+			if depth == 0 {
+				return source[:index], source[index+1:]
 			}
-			*order++
-			rules = append(rules, cssRule{selector: selector, declarations: declarations, order: *order})
-			if len(rules) >= maxCSSRules {
-				return rules
-			}
+			depth--
+		}
+	}
+	return source, ""
+}
+
+func appendStyleRule(rules []cssRule, selectorList, body string, order *int) []cssRule {
+	declarations := parseCSSDeclarations(body)
+	if len(declarations) == 0 {
+		return rules
+	}
+	for _, selectorText := range strings.Split(selectorList, ",") {
+		selector, ok := parseCSSSelector(strings.TrimSpace(selectorText))
+		if !ok {
+			continue
+		}
+		*order++
+		rules = append(rules, cssRule{selector: selector, declarations: declarations, order: *order})
+		if len(rules) >= maxCSSRules {
+			return rules
 		}
 	}
 	return rules
+}
+
+func mediaAtRuleQuery(prelude string) (string, bool) {
+	const keyword = "@media"
+	if len(prelude) < len(keyword) || !strings.EqualFold(prelude[:len(keyword)], keyword) {
+		return "", false
+	}
+	query := prelude[len(keyword):]
+	if query != "" && query[0] != '(' && !isCSSWhitespace(query[0]) {
+		return "", false
+	}
+	return query, true
+}
+
+// mediaQueryListMatches reports whether any comma-separated media query
+// matches a screen of the given width. An empty list matches all media.
+func mediaQueryListMatches(list string, viewportWidth int) bool {
+	if strings.TrimSpace(list) == "" {
+		return true
+	}
+	for _, query := range strings.Split(list, ",") {
+		if mediaQueryMatches(query, viewportWidth) {
+			return true
+		}
+	}
+	return false
+}
+
+// mediaQueryMatches evaluates "[not|only] type [and (feature)]*" and
+// "[not] (feature) [and (feature)]*" queries. Queries with unsupported features
+// or syntax never match, even when negated.
+func mediaQueryMatches(query string, viewportWidth int) bool {
+	tokens, ok := mediaQueryTokens(strings.ToLower(query))
+	if !ok || len(tokens) == 0 {
+		return false
+	}
+	negated := false
+	switch tokens[0] {
+	case "not":
+		negated = true
+		tokens = tokens[1:]
+	case "only":
+		tokens = tokens[1:]
+		if len(tokens) == 0 || tokens[0][0] == '(' {
+			return false
+		}
+	}
+	if len(tokens)%2 == 0 {
+		return false
+	}
+	matched := true
+	for index, token := range tokens {
+		switch {
+		case index%2 == 1:
+			if token != "and" {
+				return false
+			}
+		case token[0] == '(':
+			featureMatched, known := mediaFeatureMatches(token[1:len(token)-1], viewportWidth)
+			if !known {
+				return false
+			}
+			matched = matched && featureMatched
+		case index == 0 && token != "and" && token != "not" && token != "only":
+			matched = matched && (token == "all" || token == "screen")
+		default:
+			return false
+		}
+	}
+	return matched != negated
+}
+
+func mediaQueryTokens(query string) ([]string, bool) {
+	var tokens []string
+	for {
+		query = strings.TrimLeft(query, " \t\r\n\f")
+		if query == "" {
+			return tokens, true
+		}
+		switch query[0] {
+		case '(':
+			end := strings.IndexByte(query, ')')
+			if end < 0 {
+				return nil, false
+			}
+			tokens = append(tokens, query[:end+1])
+			query = query[end+1:]
+		case ')':
+			return nil, false
+		default:
+			end := strings.IndexAny(query, " \t\r\n\f()")
+			if end < 0 {
+				end = len(query)
+			}
+			tokens = append(tokens, query[:end])
+			query = query[end:]
+		}
+	}
+}
+
+// mediaFeatureMatches evaluates width, min-width, and max-width features. The
+// second result is false for unsupported features or values.
+func mediaFeatureMatches(feature string, viewportWidth int) (bool, bool) {
+	name, value, hasValue := strings.Cut(feature, ":")
+	name = strings.TrimSpace(name)
+	if !hasValue {
+		return viewportWidth > 0, name == "width"
+	}
+	length, ok := parseMediaLength(value)
+	if !ok {
+		return false, false
+	}
+	width := float64(viewportWidth)
+	switch name {
+	case "width":
+		return width == length, true
+	case "min-width":
+		return width >= length, true
+	case "max-width":
+		return width <= length, true
+	}
+	return false, false
+}
+
+func parseMediaLength(value string) (float64, bool) {
+	value = strings.TrimSpace(value)
+	multiplier := float64(1)
+	switch {
+	case strings.HasSuffix(value, "px"):
+		value = value[:len(value)-2]
+	case strings.HasSuffix(value, "rem"):
+		value = value[:len(value)-3]
+		multiplier = 16
+	case strings.HasSuffix(value, "em"):
+		value = value[:len(value)-2]
+		multiplier = 16
+	case value != "0":
+		return 0, false
+	}
+	length, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil || length < 0 {
+		return 0, false
+	}
+	return length * multiplier, true
+}
+
+func isCSSWhitespace(character byte) bool {
+	return character == ' ' || character == '\t' || character == '\n' || character == '\r' || character == '\f'
 }
 
 func stripCSSComments(source string) string {

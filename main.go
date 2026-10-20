@@ -19,7 +19,7 @@ func run() error {
 	sourceURL := flag.String("url", "https://news.ycombinator.com/", "Hacker News page URL")
 	inputPath := flag.String("input", "", "read saved HTML instead of fetching the URL")
 	outputPath := flag.String("out", "hackernews.png", "PNG output path")
-	width := flag.Int("width", 1000, "output image width in pixels (640-4096)")
+	width := flag.Int("width", defaultViewportWidth, "output image width in pixels (640-4096)")
 	storyLimit := flag.Int("stories", 30, "maximum number of stories to render (1-30)")
 	flag.Parse()
 
@@ -43,7 +43,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	stories, err := parseStoriesWithStyles(page, linkedStyles)
+	stories, err := parseStoriesForViewport(page, linkedStyles, *width)
 	if err != nil {
 		return err
 	}
