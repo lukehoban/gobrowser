@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -168,6 +170,98 @@ func fetchLinkedStylesheets(ctx context.Context, page []byte, pageURL *url.URL) 
 		totalBytes += len(body)
 	}
 	return stylesheets, nil
+}
+
+// readLocalLinkedStylesheets loads linked stylesheets for saved HTML from files
+// inside dir. Only relative-path hrefs are considered, and files are opened
+// through an os.Root so references cannot escape dir.
+func readLocalLinkedStylesheets(page []byte, dir string) (map[string]string, error) {
+	document, err := html.Parse(bytes.NewReader(page))
+	if err != nil {
+		return nil, fmt.Errorf("parse HTML for linked stylesheets: %w", err)
+	}
+	stylesheets := make(map[string]string)
+	hrefs := findLocalStylesheetHrefs(document)
+	if len(hrefs) == 0 {
+		return stylesheets, nil
+	}
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, fmt.Errorf("open stylesheet directory: %w", err)
+	}
+	defer root.Close()
+
+	totalBytes := 0
+	for _, href := range hrefs {
+		remaining := maxStylesheetBytes - totalBytes
+		if remaining <= 0 {
+			break
+		}
+		body, err := readLocalStylesheet(root, href, min(maxStylesheetSize, remaining))
+		if err != nil {
+			continue
+		}
+		stylesheets[href] = string(body)
+		totalBytes += len(body)
+	}
+	return stylesheets, nil
+}
+
+func findLocalStylesheetHrefs(document *html.Node) []string {
+	var hrefs []string
+	for node := document; node != nil; node = nextNode(node) {
+		if node.Type != html.ElementNode || node.Data != "link" || !isStylesheetLink(node) {
+			continue
+		}
+		href := strings.TrimSpace(attribute(node, "href"))
+		if _, ok := localStylesheetPath(href); !ok {
+			continue
+		}
+		hrefs = append(hrefs, href)
+		if len(hrefs) == maxStylesheetCount {
+			break
+		}
+	}
+	return hrefs
+}
+
+func localStylesheetPath(href string) (string, bool) {
+	reference, err := url.Parse(href)
+	if err != nil || reference.Scheme != "" || reference.Host != "" || reference.User != nil || reference.Opaque != "" {
+		return "", false
+	}
+	if reference.Path == "" || strings.HasPrefix(reference.Path, "/") || strings.Contains(reference.Path, "\\") {
+		return "", false
+	}
+	return filepath.FromSlash(reference.Path), true
+}
+
+func readLocalStylesheet(root *os.Root, href string, maxBytes int) ([]byte, error) {
+	name, ok := localStylesheetPath(href)
+	if !ok {
+		return nil, fmt.Errorf("unsupported local stylesheet reference %q", href)
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("stylesheet %q is not a regular file", href)
+	}
+	body, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxBytes {
+		return nil, fmt.Errorf("stylesheet %q exceeds %d bytes", href, maxBytes)
+	}
+	return body, nil
 }
 
 func findLinkedStylesheets(document *html.Node, pageURL *url.URL) []linkedStylesheet {

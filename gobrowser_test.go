@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -319,6 +320,108 @@ func TestFetchLinkedStylesheetsHonorsOverallTimeout(t *testing.T) {
 	}
 	if len(stylesheets) != 0 {
 		t.Errorf("stylesheets = %v, want no sheet after request timeout", stylesheets)
+	}
+}
+
+func TestReadLocalLinkedStylesheetsAppliesFixtureCSS(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "css/site.css", ".titleline a { color: red; font-size: 24px; }")
+	page := []byte(`<!doctype html><html><head>
+		<link rel="stylesheet" type="text/css" href="css/site.css?v=abc#frag">
+		<style>.titleline a { color: blue; }</style>
+	</head><body><table>
+		<tr class="athing"><td><span class="titleline"><a href="/story">Local style story</a></span></td></tr>
+	</table></body></html>`)
+
+	stylesheets, err := readLocalLinkedStylesheets(page, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stories, err := parseStoriesWithStyles(page, stylesheets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stories[0].Style.color, (color.RGBA{B: 255, A: 255}); got != want {
+		t.Errorf("title color = %#v, want embedded blue %#v", got, want)
+	}
+	if got, want := stories[0].Style.fontSize, float64(24); got != want {
+		t.Errorf("title font size = %v, want local stylesheet size %v", got, want)
+	}
+}
+
+func TestReadLocalLinkedStylesheetsStaysInsideInputDirectory(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "fixture")
+	writeTestFile(t, parent, "outside.css", ".titleline a { color: red; }")
+	writeTestFile(t, dir, "safe.css", ".titleline a { color: blue; }")
+	writeTestFile(t, dir, "print.css", ".titleline a { color: green; }")
+	if err := os.Mkdir(filepath.Join(dir, "dir.css"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(parent, "outside.css"), filepath.Join(dir, "link.css")); err != nil {
+		t.Fatal(err)
+	}
+	page := []byte(`<html><head>
+		<link rel="stylesheet" href="../outside.css">
+		<link rel="stylesheet" href="sub/../../outside.css">
+		<link rel="stylesheet" href="link.css">
+		<link rel="stylesheet" href="` + filepath.ToSlash(filepath.Join(parent, "outside.css")) + `">
+		<link rel="stylesheet" href="file://` + filepath.ToSlash(filepath.Join(parent, "outside.css")) + `">
+		<link rel="stylesheet" href="https://example.invalid/remote.css">
+		<link rel="stylesheet" href="//example.invalid/remote.css">
+		<link rel="stylesheet" href="missing.css">
+		<link rel="stylesheet" href="dir.css">
+		<link rel="stylesheet" media="print" href="print.css">
+		<link rel="stylesheet" href="./safe.css">
+	</head></html>`)
+
+	stylesheets, err := readLocalLinkedStylesheets(page, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"./safe.css": ".titleline a { color: blue; }"}
+	if !reflect.DeepEqual(stylesheets, want) {
+		t.Errorf("stylesheets = %v, want only %v", stylesheets, want)
+	}
+}
+
+func TestReadLocalLinkedStylesheetsEnforcesLimits(t *testing.T) {
+	dir := t.TempDir()
+	var markup strings.Builder
+	markup.WriteString("<html><head>")
+	for index := 1; index <= maxStylesheetCount+1; index++ {
+		size := maxStylesheetSize
+		if index == 1 {
+			size++
+		}
+		writeTestFile(t, dir, fmt.Sprintf("%d.css", index), strings.Repeat("a", size))
+		fmt.Fprintf(&markup, `<link rel="stylesheet" href="%d.css">`, index)
+	}
+	markup.WriteString("</head></html>")
+
+	stylesheets, err := readLocalLinkedStylesheets([]byte(markup.String()), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stylesheets["1.css"]; ok {
+		t.Error("oversized stylesheet was accepted")
+	}
+	if got, want := len(stylesheets), maxStylesheetBytes/maxStylesheetSize; got != want {
+		t.Errorf("accepted stylesheet count = %d, want aggregate-byte-bounded count %d", got, want)
+	}
+	if _, ok := stylesheets[fmt.Sprintf("%d.css", maxStylesheetCount+1)]; ok {
+		t.Error("stylesheet beyond the count limit was accepted")
+	}
+}
+
+func writeTestFile(t *testing.T, dir, name, contents string) {
+	t.Helper()
+	path := filepath.Join(dir, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

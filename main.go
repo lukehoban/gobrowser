@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 )
 
 func main() {
@@ -39,6 +40,9 @@ func run() error {
 		page, linkedStyles, err = fetchPageWithStyles(context.Background(), *sourceURL)
 	} else {
 		page, err = readPage(context.Background(), *sourceURL, *inputPath)
+		if err == nil {
+			linkedStyles, err = readLocalLinkedStylesheets(page, filepath.Dir(*inputPath))
+		}
 	}
 	if err != nil {
 		return err
