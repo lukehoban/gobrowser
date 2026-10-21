@@ -40,4 +40,6 @@ This renderer targets Hacker News story tables: ranked `.athing` rows with `.tit
 
 When fetching a page, the renderer loads up to 8 ordinary, same-origin HTTP(S) `rel="stylesheet"` links (including relative URLs and links resolved against the document’s `<base>` URL). Stylesheet redirects stay on the page’s origin; each stylesheet is limited to 1 MiB, all linked CSS to 4 MiB, and stylesheet fetching to 20 seconds. Linked CSS is not fetched for saved local HTML. Other resources, general page layout, images, and interactive browser behavior are not implemented.
 
-CSS support is intentionally limited to story-title declarations. See [issue #4](https://github.com/lukehoban/gobrowser/issues/4) for the initial rendering slice and [issue #5](https://github.com/lukehoban/gobrowser/issues/5) for focused CSS support.
+When a story is followed by Hacker News's own `tr.spacer` row, the row is sized from the page instead of the fixed layout: title line, `.subtext` line (its CSS `font-size` also sets the metadata size), and the spacer's `height` in `px` or `pt`. Pages without spacer rows, such as the fixtures above, keep the fixed layout.
+
+CSS support is intentionally limited to story-title declarations and these row metrics. See [issue #4](https://github.com/lukehoban/gobrowser/issues/4) for the initial rendering slice and [issue #5](https://github.com/lukehoban/gobrowser/issues/5) for focused CSS support.

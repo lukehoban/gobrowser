@@ -2,6 +2,7 @@ package main
 
 import (
 	"image/color"
+	"math"
 	"strconv"
 	"strings"
 
@@ -148,7 +149,7 @@ func parseCSSDeclarations(source string) map[string]cssDeclaration {
 		}
 		property := strings.ToLower(strings.TrimSpace(part[:colon]))
 		value := strings.TrimSpace(part[colon+1:])
-		if property != "color" && property != "font-size" {
+		if property != "color" && property != "font-size" && property != "height" {
 			continue
 		}
 		important := false
@@ -156,11 +157,16 @@ func parseCSSDeclarations(source string) map[string]cssDeclaration {
 			important = true
 			value = strings.TrimSpace(value[:len(value)-len("!important")])
 		}
-		if property == "color" {
-			if _, ok := parseCSSColor(value); !ok {
-				continue
-			}
-		} else if !validFontSize(value) {
+		valid := false
+		switch property {
+		case "color":
+			_, valid = parseCSSColor(value)
+		case "font-size":
+			valid = validFontSize(value)
+		case "height":
+			_, valid = parseCSSHeight(value)
+		}
+		if !valid {
 			continue
 		}
 		previous, exists := declarations[property]
@@ -321,9 +327,9 @@ func resolveTitleStyle(node *html.Node, rules []cssRule) textStyle {
 				continue
 			}
 			for property, declaration := range rule.declarations {
-				winner := &colorWinner
-				if property == "font-size" {
-					winner = &fontSizeWinner
+				winner := styleWinner(property, &colorWinner, &fontSizeWinner)
+				if winner == nil {
+					continue
 				}
 				candidate := winningDeclaration{
 					declaration: declaration,
@@ -339,9 +345,9 @@ func resolveTitleStyle(node *html.Node, rules []cssRule) textStyle {
 
 		inline := parseCSSDeclarations(attribute(current, "style"))
 		for property, declaration := range inline {
-			winner := &colorWinner
-			if property == "font-size" {
-				winner = &fontSizeWinner
+			winner := styleWinner(property, &colorWinner, &fontSizeWinner)
+			if winner == nil {
+				continue
 			}
 			candidate := winningDeclaration{declaration: declaration, inline: true, set: true}
 			if outranks(candidate, *winner) {
@@ -363,6 +369,65 @@ func resolveTitleStyle(node *html.Node, rules []cssRule) textStyle {
 		}
 	}
 	return style
+}
+
+func styleWinner(property string, colorWinner, fontSizeWinner *winningDeclaration) *winningDeclaration {
+	switch property {
+	case "color":
+		return colorWinner
+	case "font-size":
+		return fontSizeWinner
+	}
+	return nil
+}
+
+// resolveHeight returns the cascaded CSS height of node in pixels. Height is
+// not inherited, so only rules matching node itself and its inline style apply.
+func resolveHeight(node *html.Node, rules []cssRule) (int, bool) {
+	var winner winningDeclaration
+	for _, rule := range rules {
+		declaration, ok := rule.declarations["height"]
+		if !ok || !rule.selector.matches(node) {
+			continue
+		}
+		candidate := winningDeclaration{declaration: declaration, specificity: rule.selector.specificity, order: rule.order, set: true}
+		if outranks(candidate, winner) {
+			winner = candidate
+		}
+	}
+	if declaration, ok := parseCSSDeclarations(attribute(node, "style"))["height"]; ok {
+		candidate := winningDeclaration{declaration: declaration, inline: true, set: true}
+		if outranks(candidate, winner) {
+			winner = candidate
+		}
+	}
+	if !winner.set {
+		return 0, false
+	}
+	return parseCSSHeight(winner.declaration.value)
+}
+
+const maxSpacerHeight = 200
+
+func parseCSSHeight(value string) (int, bool) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	multiplier := float64(1)
+	switch {
+	case value == "0":
+		return 0, true
+	case strings.HasSuffix(value, "px"):
+		value = strings.TrimSpace(value[:len(value)-2])
+	case strings.HasSuffix(value, "pt"):
+		value = strings.TrimSpace(value[:len(value)-2])
+		multiplier = 96.0 / 72
+	default:
+		return 0, false
+	}
+	height, err := strconv.ParseFloat(value, 64)
+	if err != nil || height < 0 || height*multiplier > maxSpacerHeight {
+		return 0, false
+	}
+	return int(math.Round(height * multiplier)), true
 }
 
 func outranks(candidate, current winningDeclaration) bool {

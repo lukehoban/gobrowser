@@ -32,6 +32,14 @@ type Story struct {
 	Age      string
 	Comments string
 	Style    textStyle
+	// Rows holds the page's own row metrics. It is nil when the story is not
+	// followed by an HN spacer row, and the renderer then uses its fixed layout.
+	Rows *rowMetrics
+}
+
+type rowMetrics struct {
+	subtextFontSize float64
+	spacerHeight    int
 }
 
 func fetchPage(ctx context.Context, rawURL string) ([]byte, error) {
@@ -322,6 +330,13 @@ func parseStoriesWithStyles(page []byte, linkedStyles map[string]string) ([]Stor
 			story.User = normalizedText(findClass(subtext, "hnuser"))
 			story.Age = normalizedText(findClass(subtext, "age"))
 			story.Comments = findCommentsLink(subtext)
+			if spacer := followingSiblingElement(subtextRow, "tr"); spacer != nil && hasClass(spacer, "spacer") {
+				spacerHeight, _ := resolveHeight(spacer, rules)
+				story.Rows = &rowMetrics{spacerHeight: spacerHeight}
+				if subtext != nil {
+					story.Rows.subtextFontSize = resolveTitleStyle(subtext, rules).fontSize
+				}
+			}
 		}
 		stories = append(stories, story)
 	}

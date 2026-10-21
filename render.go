@@ -28,6 +28,7 @@ type storyLayout struct {
 	titleLines       []string
 	titleLineHeight  int
 	titleBaseline    int
+	rankBaseline     int
 	domainBaseline   int
 	domainInline     bool
 	metadataBaseline int
@@ -81,18 +82,28 @@ func renderPNG(output io.Writer, stories []Story, width int) error {
 		return fmt.Errorf("create metadata font: %w", err)
 	}
 	defer metaFace.Close()
-	defer metaFace.Close()
+	storyFaces := func(story Story) (font.Face, font.Face, error) {
+		storyTitleFace, err := titleFaceForSize(story.Style.fontSize)
+		if err != nil {
+			return nil, nil, err
+		}
+		if story.Rows == nil || story.Rows.subtextFontSize == 0 {
+			return storyTitleFace, metaFace, nil
+		}
+		storyMetaFace, err := titleFaceForSize(story.Rows.subtextFontSize)
+		return storyTitleFace, storyMetaFace, err
+	}
 
 	contentWidth := min(width-32, 960)
 	left := (width - contentWidth) / 2
 	layouts := make([]storyLayout, len(stories))
 	height := 64 + 18
 	for index, story := range stories {
-		titleFace, err := titleFaceForSize(story.Style.fontSize)
+		storyTitleFace, storyMetaFace, err := storyFaces(story)
 		if err != nil {
 			return err
 		}
-		layouts[index] = calculateStoryLayout(titleFace, metaFace, story, contentWidth-60)
+		layouts[index] = calculateStoryLayout(storyTitleFace, storyMetaFace, story, contentWidth-60)
 		height += layouts[index].height
 	}
 	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
@@ -102,11 +113,11 @@ func renderPNG(output io.Writer, stories []Story, width int) error {
 
 	rowTop := 14 + headerHeight + 12
 	for index, story := range stories {
-		titleFace, err := titleFaceForSize(story.Style.fontSize)
+		storyTitleFace, storyMetaFace, err := storyFaces(story)
 		if err != nil {
 			return err
 		}
-		drawStory(canvas, left, contentWidth, rowTop, story, titleFace, metaFace, layouts[index])
+		drawStory(canvas, left, contentWidth, rowTop, story, storyTitleFace, storyMetaFace, layouts[index])
 		rowTop += layouts[index].height
 	}
 	return png.Encode(output, canvas)
@@ -120,7 +131,17 @@ func calculateStoryLayout(titleFace, metaFace font.Face, story Story, titleWidth
 	if titleLineHeight < 1 {
 		titleLineHeight = 1
 	}
-	titleBaseline := rowPadding + titleMetrics.Ascent.Ceil()
+	// A page with its own spacer rows lays stories out as HN's table does:
+	// title row, subtext row and spacer row, with no extra padding or minimum.
+	padding, gap, bottom, minimumHeight := rowPadding, rowGap, rowBottom, rowHeight
+	if story.Rows != nil {
+		padding, gap, bottom, minimumHeight = 0, 0, story.Rows.spacerHeight, 0
+	}
+	titleBaseline := padding + titleMetrics.Ascent.Ceil()
+	rankBaseline := 16
+	if story.Rows != nil {
+		rankBaseline = titleBaseline
+	}
 	titleBottom := titleBaseline + (len(titleLines)-1)*titleLineHeight + titleMetrics.Descent.Ceil()
 	domain := ""
 	if story.Domain != "" {
@@ -130,20 +151,18 @@ func calculateStoryLayout(titleFace, metaFace font.Face, story Story, titleWidth
 		len(titleLines) == 1 &&
 		textWidth(titleFace, titleLines[0])+6+textWidth(metaFace, domain) <= titleWidth
 	domainBaseline := 0
-	metadataBaseline := titleBottom + rowGap + metadataMetrics.Ascent.Ceil()
+	metadataBaseline := titleBottom + gap + metadataMetrics.Ascent.Ceil()
 	if domain != "" && !domainInline {
 		domainBaseline = metadataBaseline
-		metadataBaseline = domainBaseline + metadataMetrics.Descent.Ceil() + rowGap + metadataMetrics.Ascent.Ceil()
+		metadataBaseline = domainBaseline + metadataMetrics.Descent.Ceil() + gap + metadataMetrics.Ascent.Ceil()
 	}
-	height := metadataBaseline + metadataMetrics.Descent.Ceil() + rowBottom
-	if height < rowHeight {
-		height = rowHeight
-	}
+	height := max(metadataBaseline+metadataMetrics.Descent.Ceil()+bottom, minimumHeight)
 	return storyLayout{
 		height:           height,
 		titleLines:       titleLines,
 		titleLineHeight:  titleLineHeight,
 		titleBaseline:    titleBaseline,
+		rankBaseline:     rankBaseline,
 		domainBaseline:   domainBaseline,
 		domainInline:     domainInline,
 		metadataBaseline: metadataBaseline,
@@ -166,8 +185,12 @@ func drawHeader(canvas *image.RGBA, left, width int, titleFace, metaFace font.Fa
 
 func drawStory(canvas *image.RGBA, left, width, top int, story Story, titleFace, metaFace font.Face, layout storyLayout) {
 	rank := story.Rank + "."
-	rankWidth := textWidth(metaFace, rank)
-	drawText(canvas, metaFace, left+23-rankWidth, top+16, rank, mutedColor)
+	rankFace := metaFace
+	if story.Rows != nil {
+		rankFace = titleFace
+	}
+	rankWidth := textWidth(rankFace, rank)
+	drawText(canvas, rankFace, left+23-rankWidth, top+layout.rankBaseline, rank, mutedColor)
 	drawTriangle(canvas, left+31, top+7)
 
 	titleX := left + 52

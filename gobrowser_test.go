@@ -522,6 +522,135 @@ func TestRenderPNGWrapsLongTitlesAtConstrainedWidth(t *testing.T) {
 	}
 }
 
+const hnRowMetricsPage = `<html><head><style>
+td { font-size: 10pt; color: #828282; }
+.title { font-size: 10pt; }
+.subtext { font-size: 7pt; }
+.titleline a { height: 40px; color: #000000; }
+.spacer.tall { height: 9pt; }
+</style></head><body><table>
+<tr class="athing submission"><td class="title"><span class="rank">1.</span></td><td class="title"><span class="titleline"><a href="https://example.com/a">First story</a></span></td></tr>
+<tr><td colspan="2"></td><td class="subtext"><span class="score">10 points</span></td></tr>
+<tr class="spacer" style="height:5px"></tr>
+<tr class="athing submission"><td class="title"><span class="rank">2.</span></td><td class="title"><span class="titleline"><a href="https://example.com/b">Second story</a></span></td></tr>
+<tr><td colspan="2"></td><td class="subtext"><span class="score">5 points</span></td></tr>
+<tr class="spacer tall" style="height: inherit"></tr>
+<tr class="athing submission"><td class="title"><span class="rank">3.</span></td><td class="title"><span class="titleline"><a href="https://example.com/c">Third story</a></span></td></tr>
+<tr><td colspan="2"></td><td class="subtext"><span class="score">1 point</span></td></tr>
+</table></body></html>`
+
+func TestParseStoriesReadsHNRowMetrics(t *testing.T) {
+	stories, err := parseStories([]byte(hnRowMetricsPage))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stories) != 3 {
+		t.Fatalf("got %d stories, want 3", len(stories))
+	}
+	sevenPoints, _ := resolveFontSize("7pt", defaultTitleFontSize)
+	tenPoints, _ := resolveFontSize("10pt", defaultTitleFontSize)
+	if got, want := stories[0].Rows, (&rowMetrics{subtextFontSize: sevenPoints, spacerHeight: 5}); !reflect.DeepEqual(got, want) {
+		t.Errorf("first story rows = %#v, want %#v", got, want)
+	}
+	if got, want := stories[1].Rows.spacerHeight, 12; got != want {
+		t.Errorf("stylesheet spacer height = %d, want %d (invalid inline height must not override it)", got, want)
+	}
+	if stories[2].Rows != nil {
+		t.Errorf("story without a spacer row has rows %#v, want nil", stories[2].Rows)
+	}
+	if got, want := stories[0].Style, (textStyle{color: color.RGBA{A: 255}, hasColor: true, fontSize: tenPoints}); got != want {
+		t.Errorf("title style = %#v, want %#v (height must not affect color or font size)", got, want)
+	}
+}
+
+func TestParseCSSHeight(t *testing.T) {
+	for value, want := range map[string]int{"5px": 5, " 7.5PX ": 8, "9pt": 12, "0": 0} {
+		if got, ok := parseCSSHeight(value); !ok || got != want {
+			t.Errorf("parseCSSHeight(%q) = %d, %v; want %d, true", value, got, ok, want)
+		}
+	}
+	for _, value := range []string{"", "inherit", "auto", "5em", "-1px", "1000px", "px"} {
+		if got, ok := parseCSSHeight(value); ok {
+			t.Errorf("parseCSSHeight(%q) = %d, true; want rejection", value, got)
+		}
+	}
+}
+
+func TestRenderPNGUsesPageRowMetrics(t *testing.T) {
+	stories, err := parseStories([]byte(hnRowMetricsPage))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stories = stories[:2]
+	parsedFont, err := opentype.Parse(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lineHeight := func(size float64) int {
+		t.Helper()
+		face, err := opentype.NewFace(parsedFont, &opentype.FaceOptions{Size: size, DPI: 72, Hinting: font.HintingFull})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer face.Close()
+		return face.Metrics().Ascent.Ceil() + face.Metrics().Descent.Ceil()
+	}
+	titleLine, subtextLine := lineHeight(stories[0].Style.fontSize), lineHeight(stories[0].Rows.subtextFontSize)
+	firstPitch := titleLine + subtextLine + 5
+	secondPitch := titleLine + subtextLine + 12
+	if firstPitch >= rowHeight {
+		t.Fatalf("expected page pitch %d to be below the fixed %dpx row", firstPitch, rowHeight)
+	}
+
+	var output bytes.Buffer
+	if err := renderPNG(&output, stories, 1280); err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := png.Decode(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := rendered.Bounds().Dy(), 64+18+firstPitch+secondPitch; got != want {
+		t.Errorf("image height = %d, want %d (rows of %d and %d px)", got, want, firstPitch, secondPitch)
+	}
+}
+
+func TestRenderPNGSeparatesLargeTitlesWithPageRowMetrics(t *testing.T) {
+	rows := &rowMetrics{subtextFontSize: 7 * 96.0 / 72, spacerHeight: 5}
+	stories := []Story{
+		{
+			Rank:  "1",
+			Title: strings.Repeat("A large wrapped title ", 6),
+			Score: "10 points",
+			Style: textStyle{color: color.RGBA{R: 255, A: 255}, hasColor: true, fontSize: maxTitleFontSize},
+			Rows:  rows,
+		},
+		{Rank: "2", Title: "Next story", Score: "5 points", Rows: rows},
+	}
+	var output bytes.Buffer
+	if err := renderPNG(&output, stories, 800); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := png.Decode(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := decoded.(*image.RGBA)
+
+	title := colorBounds(rendered, color.RGBA{R: 255, A: 255}, image.Rect(72, 60, 760, rendered.Bounds().Dy()))
+	nextTitle := colorBounds(rendered, textColor, image.Rect(72, title.Max.Y, 760, rendered.Bounds().Dy()))
+	if title.Empty() || nextTitle.Empty() {
+		t.Fatalf("missing title ink: large %v, next %v", title, nextTitle)
+	}
+	metadata := grayInkBounds(rendered, image.Rect(72, title.Max.Y, 760, nextTitle.Min.Y))
+	if metadata.Empty() {
+		t.Fatalf("large story metadata not found between y=%d and y=%d", title.Max.Y, nextTitle.Min.Y)
+	}
+	if title.Dy() <= maxTitleFontSize {
+		t.Errorf("large title ink height = %d, want a wrapped title of at least two lines", title.Dy())
+	}
+}
+
 func TestRenderPNGRejectsInvalidInput(t *testing.T) {
 	if err := renderPNG(&bytes.Buffer{}, nil, 800); err == nil {
 		t.Fatal("renderPNG succeeded without stories")
